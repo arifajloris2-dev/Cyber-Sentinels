@@ -1,0 +1,56 @@
+night_hours:
+- 20
+- 6
+admin_ips:
+- 10.20.0.10
+assets:
+- host: WIN-01
+  ip: 10.20.50.17
+  os: windows
+  role: operator workstation
+  criticality: 2
+- host: ubu-01
+  ip: 10.20.30.5
+  os: linux
+  role: gate-control server
+  criticality: 5
+- host: jump-01
+  ip: 10.20.0.10
+  role: admin jump host
+  criticality: 4
+- host: nas-01
+  ip: 10.20.0.50
+  role: backup storage
+  criticality: 4
+- host: updates-01
+  ip: 10.20.0.40
+  role: patch server (WSUS + apt mirror)
+  criticality: 3
+- host: dns-01
+  ip: 10.20.0.2
+  role: DNS
+  criticality: 3
+- host: proxy-01
+  ip: 10.20.0.8
+  role: web proxy
+  criticality: 3
+- host: files-01
+  ip: 10.20.20.30
+  role: file server
+  criticality: 3
+- host: gate-1
+  ip: 10.20.60.11
+  role: gate controller
+  criticality: 5
+- host: gate-2
+  ip: 10.20.60.12
+  role: gate controller
+  criticality: 5
+- host: gate-3
+  ip: 10.20.60.13
+  role: gate controller
+  criticality: 5
+- host: gate-4
+  ip: 10.20.60.14
+  role: gate controller
+  criticality: 5

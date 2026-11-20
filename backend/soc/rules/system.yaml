@@ -1,0 +1,51 @@
+# Configuration changes on Windows (Security/System events) and Ubuntu (systemd, sudo, useradd).
+rules:
+  - id: SYS-001
+    type: match
+    title: New service installed (Windows)
+    attack: [T1543.003]
+    severity: 6
+    night_bonus: 1
+    where: {type: config, action: service-installed}
+    group_by: [host, service]
+    window_min: 5
+    text: "Service '{service}' ({path}) installed on {host} at {first}"
+
+  - id: SYS-002
+    type: new_value
+    title: Service started that never ran before (Ubuntu)
+    attack: [T1543.002]
+    severity: 6
+    night_bonus: 1
+    fields: [host, service]
+    where: {type: config, action: service-started, os: linux}
+    text: "Service '{service}' started on {host} at {first}: never seen during the baseline"
+
+  - id: SYS-003
+    type: match
+    title: Firewall rule or setting changed
+    attack: [T1562.004]
+    severity: 6
+    night_bonus: 1
+    where: {type: config, action: firewall-change}
+    group_by: [host, user]
+    window_min: 10
+    text: "Firewall on {host} changed by {user} at {first}: {detail}"
+
+  - id: SYS-004
+    type: match
+    title: Security log cleared or audit policy changed
+    attack: [T1070.001, T1562.002]
+    severity: 8
+    where: {type: config, action: [log-cleared, audit-change]}
+    text: "{action} on {host} by {user} at {first}"
+
+  - id: SYS-005
+    type: match
+    title: New local account created
+    attack: [T1136.001]
+    severity: 6
+    where: {type: config, action: account-created}
+    group_by: [host]
+    window_min: 5
+    text: "Account created on {host} at {first}: {detail}"

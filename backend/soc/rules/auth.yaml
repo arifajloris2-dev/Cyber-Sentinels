@@ -1,0 +1,45 @@
+# Logons on Windows (event 4624/4625) and Ubuntu (sshd in auth.log).
+# logon: local | remote (RDP) | network | ssh | service | unlock
+rules:
+  - id: AUTH-001
+    type: sequence
+    title: Failed then successful remote logon
+    attack: [T1110, T1078]
+    severity: 6
+    night_bonus: 2
+    by: [host, user, src_ip]
+    within_min: 15
+    steps:
+      - where: {type: auth, action: logon, outcome: failure, logon: [remote, network, ssh], admin_src: false}
+        min_count: 2
+      - where: {type: auth, action: logon, outcome: success, logon: [remote, network, ssh], admin_src: false}
+    text: "{count} remote logon attempts for {user} on {host} from {src_ip}: failures, then success at {last}"
+
+  - id: AUTH-002
+    type: match
+    title: Remote logon from an unknown address
+    attack: [T1078]
+    severity: 5
+    night_bonus: 2
+    where: {type: auth, action: logon, outcome: success, logon: [remote, ssh], src_known: false}
+    text: "{user} logged on to {host} remotely from {src_ip}, which is not in assets.yaml"
+
+  - id: AUTH-003
+    type: threshold
+    title: Password guessing
+    attack: [T1110.001]
+    severity: 5
+    group_by: [host, src_ip]
+    window_min: 10
+    min_count: 5
+    where: {type: auth, action: logon, outcome: failure}
+    text: "{count} failed logons on {host} from {src_ip} between {first} and {last}"
+
+  - id: AUTH-004
+    type: new_value
+    title: First network logon of this account to this host
+    attack: [T1021]
+    severity: 5
+    fields: [user, host, src_ip]
+    where: {type: auth, action: logon, outcome: success, logon: [remote, network, ssh], system_user: false}
+    text: "{user} logged on to {host} from {src_ip}: never seen during the baseline"

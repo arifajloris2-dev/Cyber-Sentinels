@@ -1,0 +1,255 @@
+{
+  "attack": [
+    {
+      "id": "ubu01-syslog:13",
+      "step": "impact"
+    },
+    {
+      "id": "win01-events:54",
+      "step": "entry"
+    },
+    {
+      "id": "win01-events:55",
+      "step": "entry"
+    },
+    {
+      "id": "win01-events:56",
+      "step": "entry"
+    },
+    {
+      "id": "win01-events:57",
+      "step": "entry"
+    },
+    {
+      "id": "win01-firewall:458",
+      "step": "lateral"
+    },
+    {
+      "id": "ubu01-auth:30",
+      "step": "lateral"
+    },
+    {
+      "id": "ubu01-auth:32",
+      "step": "impact"
+    },
+    {
+      "id": "ubu01-auth:33",
+      "step": "impact"
+    },
+    {
+      "id": "ubu01-auth:34",
+      "step": "impact"
+    },
+    {
+      "id": "ubu01-auth:35",
+      "step": "impact"
+    },
+    {
+      "id": "ubu01-firewall:819",
+      "step": "lateral"
+    }
+  ],
+  "patch": [
+    {
+      "id": "ubu01-syslog:11",
+      "step": null
+    },
+    {
+      "id": "ubu01-syslog:12",
+      "step": null
+    },
+    {
+      "id": "win01-events:46",
+      "step": null
+    },
+    {
+      "id": "win01-events:47",
+      "step": null
+    },
+    {
+      "id": "win01-events:48",
+      "step": null
+    },
+    {
+      "id": "win01-events:49",
+      "step": null
+    },
+    {
+      "id": "win01-events:50",
+      "step": null
+    },
+    {
+      "id": "win01-events:52",
+      "step": null
+    },
+    {
+      "id": "win01-events:53",
+      "step": null
+    },
+    {
+      "id": "win01-events:58",
+      "step": null
+    },
+    {
+      "id": "win01-firewall:445",
+      "step": null
+    },
+    {
+      "id": "win01-firewall:447",
+      "step": null
+    },
+    {
+      "id": "win01-firewall:449",
+      "step": null
+    },
+    {
+      "id": "win01-firewall:452",
+      "step": null
+    },
+    {
+      "id": "win01-firewall:453",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:781",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:785",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:789",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:793",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:797",
+      "step": null
+    },
+    {
+      "id": "ubu01-dpkg:1",
+      "step": null
+    },
+    {
+      "id": "ubu01-dpkg:2",
+      "step": null
+    },
+    {
+      "id": "ubu01-dpkg:3",
+      "step": null
+    },
+    {
+      "id": "ubu01-dpkg:4",
+      "step": null
+    },
+    {
+      "id": "ubu01-dpkg:5",
+      "step": null
+    }
+  ],
+  "backup": [
+    {
+      "id": "ubu01-syslog:5",
+      "step": null
+    },
+    {
+      "id": "ubu01-syslog:14",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:92",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:93",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:94",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:95",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:96",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:97",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:99",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:100",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:101",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:102",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:103",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:104",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:105",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:106",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:107",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:108",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:109",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:110",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:111",
+      "step": null
+    },
+    {
+      "id": "ubu01-firewall:113",
+      "step": null
+    }
+  ],
+  "attacker_ip": "10.20.0.99",
+  "user": "j.krasniqi",
+  "hosts": [
+    "WIN-01",
+    "ubu-01"
+  ],
+  "last_attack_event": "2026-11-18T02:23:10+00:00",
+  "silent": {
+    "source": "ubu01-firewall",
+    "from": "2026-11-18T02:25:00+00:00"
+  }
+}
