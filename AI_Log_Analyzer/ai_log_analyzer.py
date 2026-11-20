@@ -53,9 +53,32 @@ RESULT_SCHEMA: dict[str, Any] = {
             "minLength": 1,
             "pattern": r"\S"
         },
+        "mitre_attack": {
+            "type": "array",
+            "items": {
+                 "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "name": {"type": "string"},
+            "evidence": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                }
+            },
+        "required": ["id", "name", "evidence"],
+        "additionalProperties": False
+    }
+},
         "recommendations": {"type": "array", "items": {"type": "string"}},
+        "commander_summary_en": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": r"\S"
+        },
+        
     },
     "required": [
+        "mitre_attack",
         "summary",
         "severity",
         "evidence",
@@ -65,6 +88,31 @@ RESULT_SCHEMA: dict[str, Any] = {
     ],
     "additionalProperties": False,
 }
+MITRE_TECHNIQUES = {
+    "T1110": "Brute Force",
+    "T1078": "Valid Accounts"
+}
+
+def validate_mitre(report, valid_ids):
+    for technique in report["mitre_attack"]:
+        technique_id = technique["id"]
+
+        if technique_id not in MITRE_TECHNIQUES:
+            raise ValueError(
+                f"Unknown MITRE technique: {technique_id}"
+            )
+
+        if technique["name"] != MITRE_TECHNIQUES[technique_id]:
+            raise ValueError("Incorrect MITRE technique name")
+
+        if not technique["evidence"]:
+            raise ValueError("MITRE mapping has no evidence")
+
+        if not set(technique["evidence"]).issubset(valid_ids):
+            raise ValueError("Invalid MITRE evidence IDs")
+
+    return report
+
 VALIDATOR = Draft202012Validator(RESULT_SCHEMA)
 
 # ---------------------------------------------------------------------------
@@ -80,7 +128,34 @@ Rules:
   Low = routine noise, Medium = suspicious but no sign of success,
   High = likely compromise or successful suspicious access, Critical = confirmed compromise or active damage.
 - "recommendations" must be short, practical next steps for an analyst.
-- Reply with a single JSON object and nothing else."""
+- Reply with a single JSON object and nothing else.
+MITRE ATT&CK Mapping:
+- T1110: Brute Force
+- T1078: Valid Accounts
+
+Rules:
+- Identify possible MITRE ATT&CK techniques.
+- Only use techniques supported by incident evidence.
+- Include supporting event IDs for each technique.
+- Never invent MITRE technique IDs.
+- If no technique matches, return an empty list.
+- A successful login alone does not prove malicious activity.
+
+Defensive recommendations:
+- Recommend investigation and defensive actions only.
+- Recommendations must be short and practical.
+- Do not execute commands or change any system.
+- All defensive actions require human approval.
+- Do not recommend destructive actions.
+
+Commander summaries:
+- Generate commander_summary_en in English.
+- Each summary must be 2-3 short sentences.
+- Explain what happened, possible impact, and uncertainty.
+- Use simple, non-technical language.
+- Do not invent information.
+"""
+
 
 # One few-shot example, deliberately using different event IDs and a different
 # scenario so the model learns the format rather than copying the content.
@@ -225,8 +300,7 @@ def validate_response(raw: str, valid_ids: set[str]) -> dict[str, Any]:
     if unknown:
         log.warning("Dropping evidence IDs not present in the incident: %s", unknown)
         data["evidence"] = [e for e in data["evidence"] if e in valid_ids]
-    return data
-
+    return validate_mitre(data, valid_ids)
 
 def analyze_incident(
     incident: dict[str, Any], base_url: str, model: str, timeout: float, retries: int
