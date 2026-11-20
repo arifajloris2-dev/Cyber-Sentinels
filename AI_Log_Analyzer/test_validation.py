@@ -10,7 +10,6 @@ from AI_Log_Analyzer.ai_log_analyzer import (
     validate_response,
 )
 
-
 def test_explanation_schema_does_not_assign_severity():
     assert "severity" not in RESULT_SCHEMA["properties"]
     assert "possible_attack" not in RESULT_SCHEMA["properties"]

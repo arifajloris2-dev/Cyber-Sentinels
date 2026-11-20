@@ -346,7 +346,6 @@ def validate_response(raw: str, valid_ids: set[str]) -> dict[str, Any]:
         raise ValueError("Response did not cite any valid evidence IDs from the incident.")
     return data
 
-
 def analyze_incident(
     incident: dict[str, Any], base_url: str, model: str, timeout: float, retries: int
 ) -> dict[str, Any]:
