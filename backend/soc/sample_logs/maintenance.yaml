@@ -1,0 +1,42 @@
+tickets:
+- id: CHG-1042
+  title: Monthly patching (Windows Update + apt)
+  hosts:
+  - WIN-01
+  - ubu-01
+  start: '2026-11-18T01:00:00+00:00'
+  end: '2026-11-18T02:40:00+00:00'
+  allow:
+  - action: update-installed
+  - action: service-installed
+    user:
+    - LocalSystem
+    - SYSTEM
+    path|startswith:
+    - C:\Program Files\
+    - C:\Windows\
+  - action: firewall-change
+    user:
+    - SYSTEM
+  - action: service-started
+    service:
+    - ssh
+    - fwupd-refresh
+    - packagekit
+    - unattended-upgrades
+  - type: network
+    dst_ip:
+    - 10.20.0.40
+- id: CHG-BACKUP
+  title: Nightly backup to nas-01
+  hosts:
+  - ubu-01
+  daily:
+  - 02:55
+  - 03:30
+  allow:
+  - service:
+    - backup-rsync
+  - type: network
+    dst_ip:
+    - 10.20.0.50

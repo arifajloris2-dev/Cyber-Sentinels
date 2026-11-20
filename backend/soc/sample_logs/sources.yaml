@@ -1,0 +1,34 @@
+baseline_hours: 24
+sources:
+- name: win01-events
+  parser: windows_events
+  path: win01_events.jsonl
+  host: WIN-01
+  expected_every_min: 120
+- name: win01-firewall
+  parser: windows_firewall
+  path: win01_pfirewall.log
+  host: WIN-01
+  expected_every_min: 30
+  utc_offset: +01:00
+- name: ubu01-auth
+  parser: linux_auth
+  path: ubu01_auth.log
+  host: ubu-01
+  expected_every_min: 90
+- name: ubu01-firewall
+  parser: linux_ufw
+  path: ubu01_ufw.log
+  host: ubu-01
+  expected_every_min: 10
+- name: ubu01-syslog
+  parser: linux_syslog
+  path: ubu01_syslog
+  host: ubu-01
+  expected_every_min: 720
+- name: ubu01-dpkg
+  parser: linux_dpkg
+  path: ubu01_dpkg.log
+  host: ubu-01
+  expected_every_min: 10080
+  utc_offset: +01:00
