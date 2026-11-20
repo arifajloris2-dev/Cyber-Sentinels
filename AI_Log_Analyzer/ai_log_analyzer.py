@@ -30,6 +30,10 @@ DEFAULT_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "qwen3:4b"
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_RETRIES = 2
+PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+)
 MAX_EVENT_MESSAGE = 500
 
 # ---------------------------------------------------------------------------
@@ -253,17 +257,35 @@ def build_payload(model: str, messages: list[dict[str, str]]) -> dict[str, Any]:
 def _local_api_url(base_url: str, path: str) -> str:
     parsed = urlsplit(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise OllamaError("Ollama must use a local HTTP(S) URL such as http://127.0.0.1:11434.")
+        raise OllamaError("Ollama must use HTTP(S) with a loopback or private LAN IP address.")
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise OllamaError("OLLAMA_URL must be a local base URL without a path, query, or fragment.")
-    hostname = parsed.hostname.lower()
+        raise OllamaError("OLLAMA_URL must be a base URL without a path, query, or fragment.")
     try:
-        local_host = hostname == "localhost" or ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        local_host = False
-    if not local_host:
-        raise OllamaError("For privacy, incident data may only be sent to a loopback Ollama server.")
+        port = parsed.port
+    except ValueError as exc:
+        raise OllamaError("OLLAMA_URL must use Ollama's port 11434.") from exc
+    if port != 11434:
+        raise OllamaError("OLLAMA_URL must use Ollama's port 11434.")
+    hostname = parsed.hostname.lower()
+    if hostname != "localhost":
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            address = None
+        if address is None or not (
+            address.is_loopback or any(address in network for network in PRIVATE_NETWORKS)
+        ):
+            raise OllamaError(
+                "For privacy, OLLAMA_URL must use loopback or a private LAN IP address."
+            )
     return base_url.rstrip("/") + path
+
+
+def configured_ollama_url() -> str:
+    """Return the validated local or private-LAN Ollama URL from the environment."""
+    base_url = os.environ.get("OLLAMA_URL", DEFAULT_URL)
+    _local_api_url(base_url, "/api/tags")
+    return base_url.rstrip("/")
 
 
 def check_ollama_model(base_url: str, model: str, timeout: float = 2.0) -> None:

@@ -35,15 +35,43 @@ The model does not detect attacks, change incident priority, close alerts, or ta
 makes the decision. Raw source logs are hidden from the main dashboard and can be opened on demand with **View
 source logs**.
 
-Install Ollama separately, then download and start the model locally:
+Install Ollama separately, then download and start the model on the machine that will host it:
 
 ```powershell
 ollama pull qwen3:4b
 ollama serve
 ```
 
-The dashboard connects only to `127.0.0.1:11434`; it never sends incident data to a remote host. Summaries run
-off the UI thread. Deterministic detection remains usable if Ollama or the model is unavailable.
+By default, the dashboard uses `127.0.0.1:11434`. To use a Qwen3 host on the same trusted LAN, set `OLLAMA_URL`
+on the client to its private IP. The analyzer accepts loopback and private LAN IPs only; public addresses and
+hostnames are rejected.
+
+On the Windows host, set Ollama to listen on the LAN and restart it:
+
+```powershell
+[Environment]::SetEnvironmentVariable("OLLAMA_HOST", "0.0.0.0:11434", "User")
+```
+
+In Windows Defender Firewall, add an inbound TCP rule for port `11434`, apply it only to the **Private** profile,
+and restrict remote addresses to the teammate's client IP. Do not create a router port-forward or enable the rule
+for Public networks.
+
+Set the host's private IP on each client before launching the dashboard:
+
+```powershell
+$env:OLLAMA_URL = "http://192.168.1.50:11434"
+python -m frontend
+```
+
+On Kali/Linux, use `export OLLAMA_URL="http://192.168.1.50:11434"` in the terminal before running `python -m frontend`.
+Replace the example address with the Windows host's private IPv4 address. If it changes, update the client setting
+and firewall allowlist.
+
+Ollama's API does not provide authentication or encrypt requests by itself. The firewall allowlist is the access
+control: any process on the allowed client can submit prompts, and incident evidence travels over the LAN. Use this
+only on a trusted WPA2/WPA3 network, with the host owner's permission, and never expose port `11434` to the public
+Internet. For sensitive logs or untrusted Wi-Fi, leave the dashboard on the default loopback endpoint. Summaries
+run off the UI thread, and deterministic detection remains usable if Ollama is unavailable.
 
 ## Integration contract
 
