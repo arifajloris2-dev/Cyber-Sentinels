@@ -5,7 +5,9 @@ import pytest
 from AI_Log_Analyzer.ai_log_analyzer import (
     OllamaError,
     RESULT_SCHEMA,
+    _local_api_url,
     build_dashboard_incident,
+    configured_ollama_url,
     query_ollama,
     validate_response,
 )
@@ -79,6 +81,23 @@ def test_dashboard_adapter_includes_deterministic_and_agent_context():
     assert evidence_refs == {"E1": "log:12"}
 
 
-def test_ollama_rejects_non_loopback_hosts_without_sending_data():
-    with pytest.raises(OllamaError, match="loopback"):
-        query_ollama("http://192.168.1.50:11434", {}, timeout=1)
+def test_ollama_allows_private_lan_ip():
+    assert _local_api_url("http://192.168.1.50:11434", "/api/tags") == (
+        "http://192.168.1.50:11434/api/tags"
+    )
+
+
+def test_configured_ollama_url_reads_private_endpoint_from_environment(monkeypatch):
+    monkeypatch.setenv("OLLAMA_URL", "http://192.168.1.50:11434")
+
+    assert configured_ollama_url() == "http://192.168.1.50:11434"
+
+
+def test_ollama_rejects_non_default_ports():
+    with pytest.raises(OllamaError, match="port 11434"):
+        _local_api_url("http://192.168.1.50:8080", "/api/tags")
+
+
+def test_ollama_rejects_public_hosts_without_sending_data():
+    with pytest.raises(OllamaError, match="private LAN"):
+        query_ollama("http://203.0.113.50:11434", {}, timeout=1)

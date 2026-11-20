@@ -781,12 +781,13 @@ class DashboardApp:
             from AI_Log_Analyzer.ai_log_analyzer import (
                 AnalysisError,
                 DEFAULT_MODEL,
-                DEFAULT_URL,
                 OllamaError,
                 analyze_incident,
                 build_dashboard_incident,
+                configured_ollama_url,
             )
 
+            ollama_url = configured_ollama_url()
             payload, evidence_refs = build_dashboard_incident(
                 incident,
                 snapshot.threat_findings,
@@ -795,7 +796,7 @@ class DashboardApp:
             )
             result = analyze_incident(
                 payload,
-                base_url=DEFAULT_URL,
+                base_url=ollama_url,
                 model=DEFAULT_MODEL,
                 timeout=240,
                 retries=0,
@@ -806,7 +807,7 @@ class DashboardApp:
         except (ValueError, OllamaError, AnalysisError) as exc:
             self.root.after(0, self._ai_summary_failed, request, str(exc))
             return
-        self.root.after(0, self._ai_summary_ready, request, incident, result, evidence_refs)
+        self.root.after(0, self._ai_summary_ready, request, result, evidence_refs)
 
     def _ai_summary_failed(self, request: tuple[int, str], error: str) -> None:
         if self._ai_request == request:
@@ -827,7 +828,6 @@ class DashboardApp:
     def _ai_summary_ready(
         self,
         request: tuple[int, str],
-        incident: Record,
         result: Record,
         evidence_refs: dict[str, str],
     ) -> None:
@@ -903,18 +903,18 @@ class DashboardApp:
         try:
             from AI_Log_Analyzer.ai_log_analyzer import (
                 DEFAULT_MODEL,
-                DEFAULT_URL,
                 OllamaError,
                 check_ollama_model,
+                configured_ollama_url,
             )
 
-            check_ollama_model(DEFAULT_URL, DEFAULT_MODEL)
+            check_ollama_model(configured_ollama_url(), DEFAULT_MODEL)
         except ImportError as exc:
             self.root.after(0, self._set_local_ai_status, f"Dependencies missing: {exc}", False)
         except OllamaError as exc:
             self.root.after(0, self._set_local_ai_status, str(exc), False)
         else:
-            self.root.after(0, self._set_local_ai_status, f"{DEFAULT_MODEL} ready · local", True)
+            self.root.after(0, self._set_local_ai_status, f"{DEFAULT_MODEL} ready · configured endpoint", True)
 
     def _set_local_ai_status(self, message: str, ready: bool) -> None:
         self._local_ai_ready = ready
