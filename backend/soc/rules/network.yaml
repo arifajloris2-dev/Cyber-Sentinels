@@ -1,0 +1,32 @@
+# Host firewall logs: Windows pfirewall.log and Ubuntu ufw.log.
+rules:
+  - id: NET-001
+    type: new_value
+    title: New outbound connection to an internal machine
+    attack: [T1021]
+    severity: 5
+    night_bonus: 1
+    fields: [host, dst_ip, dst_port]
+    where: {type: network, action: allow, direction: outbound, dst_ip|startswith: ["10.", "192.168.", "172.16."], dst_port|not: [53, 123]}
+    text: "{host} connected to {dst_ip} ({dst_host}) port {dst_port}: never seen during the baseline"
+
+  - id: NET-002
+    type: new_value
+    title: New inbound connection accepted
+    attack: [T1021]
+    severity: 4
+    night_bonus: 1
+    fields: [host, src_ip, dst_port]
+    where: {type: network, action: allow, direction: inbound}
+    text: "{host} accepted a connection from {src_ip} ({src_host}) on port {dst_port}: never seen during the baseline"
+
+  - id: NET-003
+    type: threshold
+    title: Many blocked connections from one address
+    attack: [T1046]
+    severity: 3
+    group_by: [host, src_ip]
+    window_min: 10
+    min_count: 20
+    where: {type: network, action: block}
+    text: "{count} connections from {src_ip} blocked by {host} between {first} and {last}"

@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 860" width="1400" height="860" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4b5563"/></marker>
+    <style>
+      .t{font-size:15px;font-weight:700;fill:#111827}
+      .s{font-size:12px;fill:#374151}
+      .m{font-size:11.5px;fill:#1f2937;font-family:Consolas,Menlo,monospace}
+      .h{font-size:14px;font-weight:700;fill:#111827}
+      .k{font-size:11px;font-weight:700;letter-spacing:1.2px;fill:#6b7280}
+      .r{font-size:12px;font-weight:700;fill:#111827}
+      .d{font-size:11.5px;fill:#4b5563}
+      .l{stroke:#4b5563;stroke-width:1.6;fill:none}
+    </style>
+  </defs>
+  <rect width="1400" height="860" rx="14" fill="#ffffff"/>
+  <text x="30" y="42" font-size="24" font-weight="700" fill="#111827">SOC engine · how it works</text>
+  <text x="30" y="66" class="s">Windows + Ubuntu logs → one incident with evidence · runs offline · fixed rules · reports only, never acts</text>
+
+  <!-- machines -->
+  <text x="30" y="98" class="k">1 · MACHINES (from simulation, Member 4)</text>
+  <rect x="30" y="108" width="300" height="88" rx="8" fill="#e8eef8" stroke="#2c4f86" stroke-width="1.5"/>
+  <text x="44" y="132" class="t">Windows</text>
+  <text x="44" y="152" class="s">Security + System events · Firewall log</text>
+  <text x="44" y="176" class="m">soc/collect/collect_windows.ps1</text>
+  <rect x="30" y="206" width="300" height="88" rx="8" fill="#e8eef8" stroke="#2c4f86" stroke-width="1.5"/>
+  <text x="44" y="230" class="t">Ubuntu</text>
+  <text x="44" y="250" class="s">auth.log · ufw.log · syslog · dpkg.log</text>
+  <text x="44" y="274" class="m">soc/collect/collect_linux.sh</text>
+  <text x="30" y="316" class="s">read-only · copied by cable or USB · no internet</text>
+
+  <!-- settings -->
+  <text x="30" y="356" class="k">2 · SETTINGS (in the log folder)</text>
+  <rect x="30" y="366" width="300" height="140" rx="8" fill="#fbf3e4" stroke="#9a6a1f" stroke-width="1.5"/>
+  <text x="44" y="392" class="m">sources.yaml</text><text x="160" y="392" class="s">which file is which</text>
+  <text x="44" y="418" class="m">assets.yaml</text><text x="160" y="418" class="s">machines, IPs, roles</text>
+  <text x="160" y="436" class="s">criticality, admin IPs</text>
+  <text x="44" y="462" class="m">maintenance.yaml</text><text x="160" y="480" class="s">approved tickets:</text>
+  <text x="160" y="496" class="s">patching, backup</text>
+
+  <!-- pipeline -->
+  <text x="380" y="98" class="k">3 · ENGINE  (detection.py → correlation.py)</text>
+  <g>
+    <rect x="380" y="108" width="300" height="56" rx="8" fill="#e7f2ee" stroke="#2f6b58" stroke-width="1.5"/>
+    <text x="394" y="130" class="t">① Parse</text><text x="480" y="130" class="m">soc/parsers.py</text>
+    <text x="394" y="151" class="s">every log → same simple fields, keeps raw line</text>
+    <rect x="380" y="180" width="300" height="56" rx="8" fill="#e7f2ee" stroke="#2f6b58" stroke-width="1.5"/>
+    <text x="394" y="202" class="t">② Context</text><text x="490" y="202" class="m">soc/detect.py</text>
+    <text x="394" y="223" class="s">IP → machine · night? · admin source?</text>
+    <rect x="380" y="252" width="300" height="56" rx="8" fill="#e7f2ee" stroke="#2f6b58" stroke-width="1.5"/>
+    <text x="394" y="274" class="t">③ Maintenance</text><text x="530" y="274" class="m">soc/noise.py</text>
+    <text x="394" y="295" class="s">approved work tagged with its ticket, kept aside</text>
+    <rect x="380" y="324" width="300" height="56" rx="8" fill="#e7f2ee" stroke="#2f6b58" stroke-width="1.5"/>
+    <text x="394" y="346" class="t">④ Detect</text><text x="480" y="346" class="m">soc/rules/*.yaml</text>
+    <text x="394" y="367" class="s">12 rules · match, threshold, sequence, new</text>
+    <rect x="380" y="396" width="300" height="56" rx="8" fill="#e7f2ee" stroke="#2f6b58" stroke-width="1.5"/>
+    <text x="394" y="418" class="t">⑤ Source health</text><text x="540" y="418" class="m">soc/health.py</text>
+    <text x="394" y="439" class="s">a log went silent → lower confidence</text>
+    <rect x="380" y="468" width="300" height="56" rx="8" fill="#e7f2ee" stroke="#2f6b58" stroke-width="1.5"/>
+    <text x="394" y="490" class="t">⑥ Correlate</text><text x="500" y="490" class="m">soc/correlate.py</text>
+    <text x="394" y="511" class="s">same account / host / unknown IP, 60 min</text>
+  </g>
+  <path class="l" d="M530,164 V178" marker-end="url(#a)"/>
+  <path class="l" d="M530,236 V250" marker-end="url(#a)"/>
+  <path class="l" d="M530,308 V322" marker-end="url(#a)"/>
+  <path class="l" d="M530,380 V394" marker-end="url(#a)"/>
+  <path class="l" d="M530,452 V466" marker-end="url(#a)"/>
+  <path class="l" d="M330,152 H350 V136 H378" marker-end="url(#a)"/>
+  <path class="l" d="M330,250 H350 V136" />
+  <path class="l" d="M330,436 H360 V224 H378" marker-end="url(#a)"/>
+
+  <!-- output -->
+  <text x="730" y="98" class="k">4 · RESULT</text>
+  <rect x="730" y="108" width="640" height="236" rx="10" fill="#fdf2f2" stroke="#b42318" stroke-width="1.6"/>
+  <text x="746" y="134" class="h">P1 · Remote logon → lateral movement → system change on ubu-01</text>
+  <text x="746" y="156" class="s">Confidence 75%: ubu01-firewall was silent 02:24–05:40 · 9 alerts · Windows + Ubuntu evidence</text>
+  <text x="746" y="186" class="r">entry</text>
+  <text x="836" y="186" class="d">02:05 RDP failures → success on WIN-01 from unknown 10.20.0.99</text>
+  <text x="746" y="208" class="r">lateral</text>
+  <text x="836" y="208" class="d">02:15 WIN-01 → ubu-01 SSH, never seen before · j.krasniqi logs on</text>
+  <text x="746" y="230" class="r">impact</text>
+  <text x="836" y="230" class="d">02:20 new service gatesync · 02:22 ufw allow 4444 · 02:23 new account</text>
+  <line x1="746" y1="246" x2="1354" y2="246" stroke="#f3d1cd"/>
+  <text x="746" y="268" class="s">ATT&amp;CK: T1110 → T1078 → T1021 → T1543.002 → T1562.004 → T1136.001</text>
+  <text x="746" y="290" class="s">Evidence: every alert points to log file + line · every link has a reason</text>
+  <text x="746" y="312" class="s">Suggested checks (advice only): confirm the logon with the user, check the service,</text>
+  <text x="746" y="330" class="s">consider isolating ubu-01 — the operator decides</text>
+  <path class="l" d="M680,496 H705 V226 H728" marker-end="url(#a)"/>
+
+  <rect x="730" y="360" width="310" height="164" rx="10" fill="#f3ebf7" stroke="#7a4a93" stroke-width="1.5"/>
+  <text x="746" y="386" class="h">Output files (out/)</text>
+  <text x="746" y="410" class="m">report.md</text><text x="880" y="410" class="s">for people</text>
+  <text x="746" y="432" class="m">incidents.json</text><text x="880" y="432" class="s">→ llm_advisor, main.py</text>
+  <text x="746" y="454" class="m">alerts.json</text><text x="880" y="454" class="s">every alert</text>
+  <text x="746" y="476" class="m">suppressed.json</text><text x="880" y="476" class="s">what maintenance hid</text>
+  <text x="746" y="498" class="m">health.json</text><text x="880" y="498" class="s">log sources</text>
+
+  <rect x="1060" y="360" width="310" height="164" rx="10" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+  <text x="1076" y="386" class="h">Ignored on purpose</text>
+  <text x="1076" y="410" class="s">✓ Windows Update + apt patching (CHG-1042)</text>
+  <text x="1076" y="432" class="s">✓ nightly backup (CHG-BACKUP)</text>
+  <text x="1076" y="454" class="s">✓ admin logons from the jump host</text>
+  <text x="1076" y="476" class="s">✓ typos at the keyboard</text>
+  <text x="1076" y="498" class="s">✓ normal daily traffic (baseline)</text>
+
+  <!-- rules -->
+  <text x="30" y="568" class="k">RULES  (soc/rules/*.yaml · add new ones without code)</text>
+  <rect x="30" y="578" width="1340" height="160" rx="10" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+  <text x="46" y="604" class="h" fill="#2f6b58">Logons · auth.yaml</text>
+  <text x="46" y="628" class="d"><tspan class="r">AUTH-001</tspan>  failed → successful remote logon</text>
+  <text x="46" y="650" class="d"><tspan class="r">AUTH-002</tspan>  remote logon from unknown address</text>
+  <text x="46" y="672" class="d"><tspan class="r">AUTH-003</tspan>  password guessing (5+ in 10 min)</text>
+  <text x="46" y="694" class="d"><tspan class="r">AUTH-004</tspan>  first network logon to a host</text>
+  <text x="490" y="604" class="h" fill="#2f6b58">Network · network.yaml</text>
+  <text x="490" y="628" class="d"><tspan class="r">NET-001</tspan>  new outbound internal connection</text>
+  <text x="490" y="650" class="d"><tspan class="r">NET-002</tspan>  new inbound connection accepted</text>
+  <text x="490" y="672" class="d"><tspan class="r">NET-003</tspan>  many blocked connections (scan)</text>
+  <text x="920" y="604" class="h" fill="#2f6b58">System · system.yaml</text>
+  <text x="920" y="628" class="d"><tspan class="r">SYS-001</tspan>  new service installed (Windows)</text>
+  <text x="920" y="650" class="d"><tspan class="r">SYS-002</tspan>  service never seen before (Ubuntu)</text>
+  <text x="920" y="672" class="d"><tspan class="r">SYS-003</tspan>  firewall rule changed</text>
+  <text x="920" y="694" class="d"><tspan class="r">SYS-004</tspan>  log cleared / audit changed</text>
+  <text x="920" y="716" class="d"><tspan class="r">SYS-005</tspan>  new local account</text>
+
+  <!-- team -->
+  <text x="30" y="776" class="k">FOR THE TEAM</text>
+  <text x="30" y="800" class="s">New log type → one function in soc/parsers.py · New detection → a rule in soc/rules/*.yaml · Hand-over → analyse() in correlation.py</text>
+  <text x="30" y="824" class="s">Try it (in backend/): python -m soc sample · python correlation.py soc/sample_logs · python -m pytest soc/tests</text>
+</svg>
