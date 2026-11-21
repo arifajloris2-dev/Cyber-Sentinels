@@ -1,0 +1,36 @@
+# Impact and exfiltration: ransomware preparation and encryption, large uploads to the internet.
+rules:
+  - id: IMP-001
+    type: match
+    short: backups and shadow copies deleted
+    title: Shadow copies or backups deleted (ransomware preparation)
+    attack: [T1490]
+    severity: 9
+    where:
+      type: process
+      action: process-start
+      detail|re: ["(?i)vssadmin(\\.exe)?\\s+delete\\s+shadows", "(?i)wbadmin(\\.exe)?\\s+delete\\s+(catalog|systemstatebackup|backup)",
+                  "(?i)bcdedit.*recoveryenabled\\s+no", "(?i)wmic.*shadowcopy\\s+delete", "(?i)win32_shadowcopy.*delete"]
+    text: "'{detail}' run on {host} by {user} at {first}"
+
+  - id: IMP-002
+    type: threshold
+    short: files encrypted (ransomware)
+    title: Many files rewritten with an encrypted extension by one process (ransomware)
+    attack: [T1486]
+    severity: 9
+    group_by: [host, detail]
+    window_min: 5
+    min_count: 50
+    where: {type: file, action: file-created, path|re: ["(?i)\\.(locked|encrypted|enc|crypt|crypted|lockbit|ryk)$"]}
+    text: "{count} files renamed to an encrypted extension on {host} by {detail} between {first} and {last}"
+
+  - id: EXF-001
+    type: match
+    short: large upload to the internet
+    title: Internal machine uploaded a large amount of data to an internet address
+    attack: [T1048]
+    severity: 8
+    night_bonus: 1
+    where: {type: network, action: flow, src_internal: true, dst_internal: false, bytes_out|gte: 50000000}
+    text: "{src_host} ({src_ip}) sent {bytes_out} bytes to {dst_ip}:{dst_port} at {first}"

@@ -38,7 +38,27 @@ WIN_EVENTS = {   # event id -> (type, action, outcome)
     4950: ("config", "firewall-change", "success"), 4719: ("config", "audit-change", "success"),
     1102: ("config", "log-cleared", "success"), 4720: ("config", "account-created", "success"),
     19: ("update", "update-installed", "success"), 4698: ("config", "task-created", "success"),
+    4768: ("auth", "kerberos-tgt", "success"), 4769: ("auth", "kerberos-service-ticket", "success"),
+    4728: ("config", "group-member-added", "success"), 4732: ("config", "group-member-added", "success"),
+    4756: ("config", "group-member-added", "success"), 5140: ("file", "share-access", "success"),
 }
+GROUP_ADD = {4728, 4732, 4756}
+
+
+def _account_name(value):
+    """'j.osmani@BASE.EXAMPLE' -> 'j.osmani'; 'CN=svc_upd,OU=Users,DC=base' -> 'svc_upd'; 'BASE\\x' -> 'x'."""
+    if not value:
+        return None
+    v = str(value)
+    if v.upper().startswith("CN="):
+        v = v[3:].split(",", 1)[0]
+    return v.split("@", 1)[0].rsplit("\\", 1)[-1] or None
+
+
+def _ip(value):
+    v = str(value or "").strip()
+    v = v[7:] if v.lower().startswith("::ffff:") else v
+    return None if v in ("", "-", "::1", "127.0.0.1") else v
 
 
 def parse_windows_events(path: Path, src: dict, stats: dict):
@@ -49,20 +69,36 @@ def parse_windows_events(path: Path, src: dict, stats: dict):
             try:
                 r = json.loads(line)
                 _seen(stats, r["TimeCreated"])
-                kind = WIN_EVENTS.get(int(r["Id"]))
+                eid = int(r["Id"])
+                kind = WIN_EVENTS.get(eid)
                 if not kind:
                     stats["skipped"] += 1
                     continue
                 d = r.get("EventData") or {}
-                ip = d.get("IpAddress")
+                extra = {}
+                user = d.get("TargetUserName") or d.get("SubjectUserName") or d.get("AccountName")
+                detail = (f"new account {d.get('TargetUserName')}" if eid == 4720 else None) \
+                    or d.get("RuleName") or d.get("updateTitle") or d.get("TaskName") or d.get("TargetServerName")
+                if eid in GROUP_ADD:          # who added whom to which group (TargetUserName is the GROUP here)
+                    member = _account_name(d.get("MemberName")) or d.get("MemberSid")
+                    user, extra = d.get("SubjectUserName"), {"group": d.get("TargetUserName"), "member": member}
+                    detail = f"{member} added to {d.get('TargetUserName')} by {d.get('SubjectUserName')}"
+                elif eid in (4768, 4769):     # Kerberos: who asked, for which service, with which encryption
+                    user = _account_name(d.get("TargetUserName"))
+                    extra = {"ticket_enc": str(d.get("TicketEncryptionType", "")).lower() or None, "status": d.get("Status")}
+                    detail = f"{d.get('ServiceName') or 'TGT'} ({extra['ticket_enc']})"
+                elif eid == 5140:             # a network share was opened (ADMIN$ / C$ = remote administration)
+                    user, extra = d.get("SubjectUserName"), {"share": d.get("ShareName")}
+                    detail = d.get("ShareName")
+                elif eid == 4624:
+                    extra = {"auth_package": d.get("AuthenticationPackageName"), "logon_process": d.get("LogonProcessName"),
+                             "key_length": d.get("KeyLength")}
                 yield make_event(src["name"], n, line, src["path"], r["TimeCreated"], os="windows", host=r.get("MachineName"),
-                                 type=kind[0], action=kind[1], outcome=kind[2], code=r["Id"],
-                                 user=d.get("TargetUserName") or d.get("SubjectUserName") or d.get("AccountName"),
-                                 src_ip=None if ip in ("-", "::1", "127.0.0.1") else ip,
+                                 type=kind[0], action=kind[1], outcome=kind[2], code=eid, user=_account_name(user) if eid in (4768, 4769) else user,
+                                 src_ip=_ip(d.get("IpAddress")),
                                  logon=WIN_LOGON.get(str(d.get("LogonType", "")), None),
                                  service=d.get("ServiceName"), path=d.get("ImagePath") or d.get("ServiceFileName") or d.get("ApplicationPath"),
-                                 detail=(f"new account {d.get('TargetUserName')}" if int(r["Id"]) == 4720 else None)
-                                 or d.get("RuleName") or d.get("updateTitle") or d.get("TaskName") or d.get("TargetServerName"))
+                                 detail=detail, **extra)
             except (ValueError, KeyError, TypeError):
                 stats["errors"] += 1
 
@@ -119,6 +155,7 @@ AUTH_FAIL = re.compile(r"Failed (?:password|publickey) for (?:invalid user )?(\S
 AUTH_OK = re.compile(r"Accepted (?:password|publickey|keyboard-interactive/pam) for (\S+) from (\S+) port (\d+)")
 SUDO = re.compile(r"^\s*(\S+) : .*COMMAND=(.*)$")
 NEW_USER = re.compile(r"new user: name=([^,\s]+)")
+ROOT_SHELL = re.compile(r"^(/usr)?/bin/(ba|z|da)?sh( -i| -l)?$|^(/usr/bin/)?su( -| root| - root)?$|^(/usr/bin/)?sudo -i$")
 
 
 def parse_linux_auth(path: Path, src: dict, stats: dict):
@@ -130,15 +167,25 @@ def parse_linux_auth(path: Path, src: dict, stats: dict):
             yield make_event(src["name"], n, line, src["path"], ts, off, **base, type="auth", action="logon",
                              outcome="success" if ok else "failure", user=m[1], src_ip=m[2], logon="ssh")
         elif prog == "sudo" and (m := SUDO.search(msg)):
-            cmd = m[2]
+            cmd = m[2].strip()
+            run_as = (re.search(r"USER=(\S+)", msg) or [None, None])[1]
+            extra = {"run_as": run_as}
             if re.search(r"\b(ufw|iptables|nft)\b", cmd):
                 act = "firewall-change"
             elif re.search(r"\b(useradd|adduser)\b", cmd):
                 act = "account-created"
+            elif (g := re.search(r"\b(?:usermod\s+.*-a?G\s+\S*\b(sudo|wheel|admin)\b|gpasswd\s+-a\s+\S+\s+(sudo|wheel|admin))", cmd)):
+                act = "group-member-added"
+                extra.update(group=g[1] or g[2], member=cmd.split()[-1] if g[1] else cmd.split()[-2])
+            elif run_as == "root" and ROOT_SHELL.match(cmd):
+                act = "root-shell"
+            elif "authorized_keys" in cmd:
+                act = "ssh-key-added"
             else:
                 act = "sudo"
-            yield make_event(src["name"], n, line, src["path"], ts, off, **base, type="config" if act != "sudo" else "admin",
-                             action=act, outcome="success", user=m[1], detail=cmd)
+            yield make_event(src["name"], n, line, src["path"], ts, off, **base,
+                             type="admin" if act in ("sudo", "root-shell") else "config",
+                             action=act, outcome="success", user=m[1], detail=cmd, **extra)
         elif prog in ("useradd", "adduser") and (m := NEW_USER.search(msg)):
             yield make_event(src["name"], n, line, src["path"], ts, off, **base, type="config", action="account-created",
                              outcome="success", user=m[1], detail=f"new account {m[1]}")
@@ -223,6 +270,12 @@ def parse_windows_sysmon(path: Path, src: dict, stats: dict):
                 elif eid == 11:
                     yield make_event(src["name"], n, line, src["path"], r["TimeCreated"], **{**base, "path": d.get("TargetFilename")},
                                      type="file", action="file-created", outcome="success", detail=d.get("Image"))
+                elif eid == 10:               # one process opened another (LSASS opened = credential dumping)
+                    yield make_event(src["name"], n, line, src["path"], r["TimeCreated"],
+                                     **{**base, "path": d.get("SourceImage"), "user": _account(d.get("SourceUser"))},
+                                     type="process", action="process-access", outcome="success", target=d.get("TargetImage"),
+                                     granted=d.get("GrantedAccess"), detail=f"{d.get('SourceImage')} -> {d.get('TargetImage')} "
+                                                                            f"({d.get('GrantedAccess')})")
                 else:
                     stats["skipped"] += 1
             except (ValueError, KeyError, TypeError):
@@ -255,7 +308,8 @@ def parse_zeek_conn(path: Path, src: dict, stats: dict):
                                  type="network", action="flow", outcome="success" if state in ("SF", "S1", "S2", "S3", "RSTO", "RSTR") else "failure",
                                  proto=r.get("proto"), src_ip=r["id.orig_h"], src_port=_int(r.get("id.orig_p")), dst_ip=r["id.resp_h"],
                                  dst_port=_int(r.get("id.resp_p")), service=None if r.get("service") in (None, "-") else r.get("service"),
-                                 conn_state=state, bytes=(_int(r.get("orig_bytes")) or 0) + (_int(r.get("resp_bytes")) or 0))
+                                 conn_state=state, bytes=(_int(r.get("orig_bytes")) or 0) + (_int(r.get("resp_bytes")) or 0),
+                                 bytes_out=_int(r.get("orig_bytes")) or 0)
             except (ValueError, KeyError, TypeError):
                 stats["errors"] += 1
 
@@ -313,10 +367,25 @@ def parse_mail_events(path: Path, src: dict, stats: dict):
                 stats["errors"] += 1
 
 
+# ======================================================================= Perimeter firewall (pfSense filterlog)
+def parse_pfsense_filterlog(path: Path, src: dict, stats: dict):
+    """pfSense filterlog, IPv4 TCP/UDP: rule,sub,anchor,tracker,iface,reason,action,dir,ipver,tos,ecn,ttl,id,offset,
+    flags,protonum,proto,length,src,dst,srcport,dstport,...   (action pass|block, dir in|out)"""
+    for n, line, ts, host, prog, msg in _syslog_lines(path, src, stats):
+        f = msg.split(",")
+        if prog != "filterlog" or len(f) < 22 or f[8] != "4" or f[16] not in ("tcp", "udp"):
+            stats["skipped"] += 1
+            continue
+        yield make_event(src["name"], n, line, src["path"], ts, src.get("utc_offset"), os="network", host=host or src.get("host"),
+                         type="network", action="allow" if f[6] == "pass" else "block", outcome="success" if f[6] == "pass" else "failure",
+                         direction="inbound" if f[7] == "in" else "outbound", proto=f[16], src_ip=f[18], dst_ip=f[19],
+                         src_port=_int(f[20]), dst_port=_int(f[21]), rule_id=f[3], interface=f[4], perimeter=True)
+
+
 PARSERS = {"windows_events": parse_windows_events, "windows_firewall": parse_windows_firewall, "linux_auth": parse_linux_auth,
            "linux_ufw": parse_linux_ufw, "linux_syslog": parse_linux_syslog, "linux_dpkg": parse_linux_dpkg,
            "windows_sysmon": parse_windows_sysmon, "zeek_conn": parse_zeek_conn, "mail_gateway": parse_mail_gateway,
-           "mail_events": parse_mail_events}
+           "mail_events": parse_mail_events, "pfsense_filterlog": parse_pfsense_filterlog}
 
 
 def read_all(sources: list[dict], folder: Path) -> tuple[list[dict], list[dict]]:

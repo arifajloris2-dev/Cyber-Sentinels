@@ -60,6 +60,7 @@ incidents = analyse("soc/sample_logs")["incidents"]   # JSON-ready: for llm_advi
 | Network sensor | Zeek `conn.log` (JSON or default TSV) | `zeek_conn` | Zeek on a SPAN/mirror port |
 | Mail gateway | Verdict log, JSON lines (`ts, direction, client_ip, from, to[], subject, attachments[], verdict, action`) | `mail_gateway` | gateway export |
 | Mail events | JSON lines (`timestamp, event: email_delivered/url_clicked, user, message_id, verdict, url`) | `mail_events` | lab demo |
+| Perimeter firewall | pfSense `filterlog` (syslog + CSV) | `pfsense_filterlog` | firewall syslog export |
 
 See `soc/collect/README.md` for the one-time setup on each machine.
 
@@ -84,6 +85,20 @@ See `soc/collect/README.md` for the one-time setup on each machine.
 | PROC-004 | Program file written into a user profile (Sysmon) | T1105 |
 | MAIL-001 | Mail with a risky attachment (.docm, .js, .iso, …) delivered to a user | T1566.001 |
 | MAIL-002 | User clicked a link in a mail flagged as phishing | T1566.002, T1204.001 |
+| CRED-001 | A process opened LSASS memory (credential dumping, Sysmon 10) | T1003.001 |
+| CRED-002 | Credential dumping command (comsvcs MiniDump, procdump on lsass, mimikatz) | T1003.001 |
+| CRED-003 | Kerberoasting: 3+ RC4 service tickets for different service accounts in 10 min | T1558.003 |
+| LAT-001 | Remote execution service installed (PsExec and similar) | T1569.002, T1021.002 |
+| LAT-002 | Pass-the-hash pattern: privileged account, network logon, NTLM, key length 0 | T1550.002 |
+| LAT-003 | Admin share (ADMIN$, C$) opened from a workstation | T1021.002 |
+| NET-008 | Connection between zones that the zone policy does not allow | T1021 |
+| PRIV-001 | Account added to a privileged group (`privileged_groups`) | T1098 |
+| PRIV-002 | Root shell or sudo-group change by an account that is not an admin | T1548.003 |
+| PRIV-003 | Privileged account used from a machine it never used in the baseline | T1078.002 |
+| AUTH-005 | Service account used for an interactive or SSH logon | T1078 |
+| IMP-001 | Shadow copies or backups deleted (ransomware preparation) | T1490 |
+| IMP-002 | 50+ files rewritten with an encrypted extension by one process in 5 min | T1486 |
+| EXF-001 | Internal machine uploaded 50 MB+ to an internet address in one connection | T1048 |
 | SYS-001 | New service installed (Windows) | T1543.003 |
 | SYS-002 | Service started that never ran before (Ubuntu) | T1543.002 |
 | SYS-003 | Firewall rule or setting changed | T1562.004 |
@@ -103,7 +118,7 @@ window), `distinct_threshold` (N unique values for one target), `sequence` (step
 | File | Contains |
 |---|---|
 | `sources.yaml` | Which file is which: parser, host, `utc_offset` for logs in local time, how often it normally writes |
-| `assets.yaml` | Known machines: host, IP, role, criticality (1–5); admin IPs; night hours; optional `internal_nets` (CIDRs, default the private ranges) and `public_services` (`[{host, ports}]`: ports a server offers to the internet on purpose) |
+| `assets.yaml` | Known machines: host, IP, role, criticality (1–5); admin IPs; night hours; optional `internal_nets` (CIDRs, default the private ranges) and `public_services` (`[{host, ports}]`: ports a server offers to the internet on purpose); optional `users` (`[{user, role, groups, privileged, home}]`), `privileged_groups`, `zones` (`[{name, cidr}]`) and `zone_policy` (`[{from, to, ports}]`, zone/host/"any") |
 | `maintenance.yaml` | Approved change tickets: hosts, time window, and what each is allowed to do |
 | `osint_output.json` (optional) | Threat intel from `backend/osint_agent.py`. If the log folder has none, `backend/data/osint_output.json` is used |
 

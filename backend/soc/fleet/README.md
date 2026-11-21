@@ -36,8 +36,15 @@ The generated folders (`logs/`, `logs_ecs/`, `engine-out/`) are about 65 MB and 
 | `<host>_dpkg.log` | Ubuntu packages (UTC+1) | `linux_dpkg` |
 | `srv-mon-01_zeek-conn.log` | Zeek conn.log, JSON (network flows) | `zeek_conn` |
 | `srv-mail-01_mailgw.jsonl` | Mail security gateway verdicts, JSON | `mail_gateway` |
+| `fw-edge-01_filterlog.log` | Perimeter firewall (pfSense filterlog CSV): every connection to or from the internet | `pfsense_filterlog` |
 
 Each log folder also holds the engine settings: `sources.yaml`, `assets.yaml` and `maintenance.yaml`. `truth.json` is the answer key: every planted line with its ATT&CK techniques. `logs_ecs/` holds one ECS 8.x document per raw line, for Sigma, ES|QL and similar tools.
+
+## Depth: who, where, what is allowed
+- **Users** (`assets.yaml` → `users`): operators, night-shift gate operators, helpdesk, IT admin (daily + `adm.win` / `adm.ops` admin accounts), a sealed domain admin, a DB admin, and service accounts (some with Kerberos SPNs). Each has a role, groups, `privileged`, and a home machine. `privileged_groups` lists the groups that matter.
+- **Zones** (`zones`): NETDEV, CORE (DCs, DNS, jump host), SERVERS, USERS, DMZ, DATA, APP, OT (gate control).
+- **Zone policy** (`zone_policy`): which zone or host may reach which, on which ports (for example, only the jump host administers servers; users never reach OT or DATA directly). Anything else between zones is a violation.
+- **Perimeter firewall** `fw-edge-01`: passes and blocks for all internet traffic, including a forgotten RDP port-forward (used in A1).
 
 ## What happens on day 2 (2026-11-22)
 Day 1 (2026-11-21) is normal operations only: it is the baseline.
@@ -48,11 +55,17 @@ Day 1 (2026-11-21) is normal operations only: it is the baseline.
 | A2 | SSH password spraying on srv-web-01 from outside | T1110.003 |
 | A3 | Unknown device logs on to srv-logistics-db and dumps the database | T1200, T1078, T1005 |
 | A4 | Phishing .docm → PowerShell → payload → scheduled task → beacons to 203.0.113.77:443 | T1566.001, T1204.002, T1059.001, T1105, T1053.005, T1071.001, T1573 |
+| A5 | **Domain takeover → ransomware**: RDP password guessing on WS-BASE-021 → LSASS dump (comsvcs MiniDump) → adm.win's hash used on DC-02 (NTLM, PsExec) → new account added to Domain Admins → PsExec to FS-01 → shadow copies deleted → 150 files encrypted + ransom note | T1110.001, T1078, T1003.001, T1550.002, T1021.002, T1569.002, T1098, T1490, T1486 |
+| A6 | **Kerberoasting → data theft**: 4 RC4 service tickets in 20 s from WS-BASE-009 → cracked svc_sql logs on to the logistics DB by SSH (zone violation) → pg_dump + root shell → 486 MB uploaded at night | T1558.003, T1078, T1021.004, T1005, T1548.003, T1048 |
+| A8 | **Bot swarm**: 60 internet addresses hit the web portal within 90 s; the perimeter drops them | T1498 |
 | B1 | Harmless: 6 mistyped passwords, then success | – |
 | B2 | Harmless: night admin RDP and a new service on DC-02, under emergency ticket CHG-2026-1122-03 | – |
 | B3 | Harmless: weekly authenticated vulnerability scan (CHG-VULNSCAN-WEEKLY) | – |
 | B4 | Harmless: malware mail campaign, quarantined by the gateway | – |
 | – | Harmless: daily PowerShell inventory script on every workstation (both days) | – |
+| B5 | Harmless: admin PsExec from JUMP-01 to PRINT-01 + helpdesk RDP to WS-BASE-021, under ticket CHG-2026-1122-04 | – |
+| B6 | Harmless: helpdesk adds a colleague to 'Gate Operators' (not a privileged group) | – |
+| – | Harmless: Kerberos AES tickets at every logon; adm.ops root shell on every Linux server from the jump host; ~250 internet scans a day dropped at the edge | – |
 | Maintenance | Patching CHG-2026-1122-01 (01:00–03:00), web firewall change CHG-2026-1122-02, nightly backup | – |
 | Silent source | `srv-gate-ctrl-01` ufw log is silent 02:05–04:30 (A1 turns logging off). Zeek still sees the traffic. | – |
 

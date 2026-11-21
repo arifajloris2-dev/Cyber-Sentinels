@@ -46,6 +46,7 @@ DAY2 = DAY1 + timedelta(days=1)
 LOCAL = timezone(timedelta(hours=1))
 DOMAIN = "base.example"
 rng = random.Random(2026)
+rng2 = random.Random(4096)   # for everything added later (zones, Kerberos, perimeter, A5-A8): the older scenarios keep their timings
 
 # ======================================================================= inventory (50 devices)
 NAMES = ["a.krasniqi", "b.berisha", "d.gashi", "e.hoxha", "f.morina", "g.kelmendi", "h.rexhepi", "i.bytyqi", "j.osmani",
@@ -110,6 +111,55 @@ def align_with_inventory(devices: list[dict], path: Path = ASSETS_JSON) -> list[
 
 ALIGN_NOTES = align_with_inventory(DEV)
 assert len({d["ip"] for d in DEV}) == len(DEV), "two devices share an IP"
+
+# ---- directory: who is who (roles, groups, privileged, where they normally work) ------------------------------------
+# Detection uses this context: a privileged account used from an unusual place, a service account logging on
+# interactively, a member added to a privileged group, an operator getting a root shell.
+PRIVILEGED_GROUPS = ["Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators", "IT Admins", "DB Admins",
+                     "Backup Operators", "sudo"]
+DIRECTORY = (
+    [{"user": n, "role": "operator", "groups": ["Operators"], "privileged": False, "home": f"WS-BASE-{i + 1:03d}"}
+     for i, n in enumerate(NAMES) if n not in ("a.krasniqi", "k.zeqiri")]
+    + [{"user": "a.krasniqi", "role": "IT administrator (daily account)", "groups": ["Operators", "IT Staff"], "privileged": False,
+        "home": "WS-BASE-001"},
+       {"user": "k.zeqiri", "role": "helpdesk", "groups": ["Helpdesk"], "privileged": False, "home": "WS-BASE-010"},
+       {"user": "op_night_01", "role": "night-shift gate operator", "groups": ["Gate Operators"], "privileged": False, "home": "WS-BASE-014"},
+       {"user": "op_night_02", "role": "night-shift gate operator", "groups": ["Gate Operators"], "privileged": False, "home": "WS-BASE-013"},
+       {"user": "op_night_03", "role": "night-shift gate operator", "groups": ["Gate Operators"], "privileged": False, "home": "WS-BASE-012"},
+       {"user": "adm.win", "role": "Windows admin account", "groups": ["IT Admins", "Administrators"], "privileged": True, "home": "JUMP-01"},
+       {"user": "adm.ops", "role": "Linux admin account", "groups": ["IT Admins", "sudo"], "privileged": True, "home": "JUMP-01"},
+       {"user": "da.admin", "role": "domain admin (break-glass, sealed)", "groups": ["Domain Admins"], "privileged": True, "home": "JUMP-01"},
+       {"user": "dbadmin", "role": "database admin", "groups": ["DB Admins"], "privileged": True, "home": "JUMP-01"}]
+    + [{"user": u, "role": "service account", "groups": ["Service Accounts"] + extra, "privileged": False, "home": host,
+        "interactive": False, **({"spn": spn} if spn else {})}
+       for u, host, extra, spn in [("svc_ops_night", "WS-BASE-014", ["Gate Operators"], None),
+                                   ("svc_gate_daemon", "srv-gate-ctrl-01", [], None), ("bkp_svc", "srv-backup-02", [], None),
+                                   ("svc_mon", "srv-mon-01", [], None), ("svc_vulnscan", "srv-mon-01", [], None),
+                                   ("svc_c2", "srv-c2-app", [], "HTTP/srv-c2-app.base.example"),
+                                   ("svc_sql", "srv-logistics-db", [], "MSSQLSvc/srv-logistics-db.base.example:1433"),
+                                   ("svc_web", "srv-web-01", [], "HTTP/srv-web-01.base.example"),
+                                   ("svc_report", "srv-c2-app", [], "HTTP/reports.base.example")]])
+USER_SPNS = [d["user"] for d in DIRECTORY if d.get("spn")]
+
+# ---- network zones and the firewall policy between them ----------------------------------------------------------
+ZONES = [("NETDEV", "10.24.0.0/24"), ("CORE", "10.24.1.0/24"), ("SERVERS", "10.24.2.0/24"), ("USERS", "10.24.3.0/24"),
+         ("DMZ", "10.24.5.0/24"), ("DATA", "10.24.6.0/24"), ("APP", "10.24.7.0/24"), ("OT", "10.24.8.0/24")]
+# allowed internal flows; traffic inside one zone is always allowed. from/to = zone, host or "any"
+ZONE_POLICY = [
+    {"from": "USERS", "to": "CORE", "ports": [53, 88, 135, 389, 445, 464, 636, 3268], "why": "logon, DNS, group policy"},
+    {"from": "USERS", "to": "SERVERS", "ports": [445, 8530, 9100], "why": "file shares, updates, printing"},
+    {"from": "USERS", "to": "DMZ", "ports": [993, 3128], "why": "mail, web proxy"},
+    {"from": "WS-BASE-001", "to": "JUMP-01", "ports": [3389], "why": "IT admin to the jump host"},
+    {"from": "JUMP-01", "to": "any", "ports": [22, 445, 3389, 5985], "why": "administration only via the jump host"},
+    {"from": "srv-mon-01", "to": "any", "ports": [9100], "why": "monitoring"},
+    {"from": "any", "to": "srv-dns-01", "ports": [53], "why": "DNS"},
+    {"from": "any", "to": "srv-backup-02", "ports": [873], "why": "backup"},
+    {"from": "any", "to": "srv-proxy-01", "ports": [3128], "why": "proxy / apt mirror"},
+    {"from": "any", "to": "WSUS-01", "ports": [8530], "why": "Windows updates"},
+    {"from": "APP", "to": "DATA", "ports": [5432], "why": "C2 application to its database"},
+    {"from": "SERVERS", "to": "CORE", "ports": [53, 88, 389, 445], "why": "servers to the domain controllers"},
+    {"from": "DMZ", "to": "CORE", "ports": [53], "why": "DNS"},
+]
 
 BY = {d["host"]: d for d in DEV}
 IP = {d["host"]: d["ip"] for d in DEV}
@@ -185,9 +235,12 @@ WIN_ECS = {  # event id -> (category, type, action)
     4634: ("authentication", ["end"], "logged-out"), 4672: ("iam", ["admin"], "special-privileges-assigned"),
     4688: ("process", ["start"], "created-process"), 7045: ("configuration", ["creation"], "service-installed"),
     19: ("package", ["installation"], "update-installed"), 4947: ("configuration", ["change"], "firewall-rule-modified"),
-    1102: ("configuration", ["deletion"], "audit-log-cleared"), 4698: ("configuration", ["creation"], "scheduled-task-created"),
+    1102: ("configuration", ["deletion"], "audit-log-cleared"), 4648: ("authentication", ["start"], "explicit-credentials"),
+    4768: ("authentication", ["start"], "kerberos-tgt-requested"), 4769: ("authentication", ["start"], "kerberos-service-ticket-requested"),
+    4728: ("iam", ["group", "change"], "added-member-to-group"), 4732: ("iam", ["group", "change"], "added-member-to-group"),
+    5140: ("file", ["access"], "network-share-accessed"), 4698: ("configuration", ["creation"], "scheduled-task-created"),
 }
-SYSMON_ECS = {1: ("process", ["start"], "process-created"), 3: ("network", ["connection", "start"], "network-connection"),
+SYSMON_ECS = {10: ("process", ["access"], "process-accessed"), 1: ("process", ["start"], "process-created"), 3: ("network", ["connection", "start"], "network-connection"),
               11: ("file", ["creation"], "file-created")}
 
 
@@ -253,13 +306,13 @@ class Logs:
                "LogName": "Microsoft-Windows-Sysmon/Operational", "MachineName": host, "RecordId": self.rid, "EventData": data}
         text = json.dumps(rec)
         cat, typ, act = SYSMON_ECS[eid]
-        img = data.get("Image", "")
+        img = data.get("Image") or data.get("SourceImage", "")
         proc = {"executable": img, "name": basename(img), "pid": data.get("ProcessId"),
                 **({"command_line": data["CommandLine"]} if "CommandLine" in data else {}),
                 **({"parent": {"executable": data["ParentImage"], "name": basename(data["ParentImage"]),
                                "command_line": data.get("ParentCommandLine")}} if "ParentImage" in data else {}),
                 **({"hash": {"sha256": data["Hashes"].split("=", 1)[1]}} if "Hashes" in data else {})}
-        doc = ecs(t, host, "windows.sysmon_operational", text, cat, typ, act, "success", process=proc, user=win_user(data.get("User")),
+        doc = ecs(t, host, "windows.sysmon_operational", text, cat, typ, act, "success", process=proc, user=win_user(data.get("User") or data.get("SourceUser")),
                   source=endpoint(data["SourceIp"], data["SourcePort"]) if eid == 3 else None,
                   destination=endpoint(data["DestinationIp"], data["DestinationPort"]) if eid == 3 else None,
                   network={"transport": data["Protocol"], "direction": "egress" if not data["DestinationIp"].startswith("10.24.") else "internal"} if eid == 3 else None,
@@ -300,7 +353,7 @@ class Logs:
         self.add(f"{host}_dpkg.log", t, text, label, doc)
 
     # ---- Zeek conn.log (network sensor on srv-mon-01, SPAN of core switch + perimeter)
-    def flow(self, t, src, sport, dst, dport, proto="tcp", state="SF", label=None):
+    def flow(self, t, src, sport, dst, dport, proto="tcp", state="SF", label=None, size=None):
         proto = proto.lower()
         svc = {53: "dns", 22: "ssh", 25: "smtp", 443: "ssl", 993: "ssl", 3389: "rdp", 445: "smb", 88: "krb_tcp", 389: "ldap",
                3128: "http", 8530: "http", 5432: "postgresql", 873: "rsync", 502: "modbus", 9100: None, 8080: "http"}.get(dport)
@@ -310,8 +363,9 @@ class Logs:
         if svc and state == "SF":
             rec["service"] = svc
         if state == "SF":
-            ob, rb = rng.randint(60, 4000), rng.randint(60, 40000)
-            rec.update({"duration": round(rng.uniform(0.002, 4.0), 6), "orig_bytes": ob, "resp_bytes": rb, "conn_state": "SF",
+            ob, rb = (size, rng2.randint(2000, 9000)) if size else (rng.randint(60, 4000), rng.randint(60, 40000))
+            rec.update({"duration": round(rng2.uniform(30, 600), 6) if size else round(rng.uniform(0.002, 4.0), 6),
+                        "orig_bytes": ob, "resp_bytes": rb, "conn_state": "SF",
                         "history": "Dd" if proto == "udp" else "ShADadFf", "orig_pkts": max(1, ob // 500), "resp_pkts": max(1, rb // 1200)})
         else:
             rec.update({"duration": 0.0 if state == "REJ" else None, "orig_bytes": 0, "resp_bytes": 0, "conn_state": state,
@@ -329,6 +383,25 @@ class Logs:
         if "duration" in rec:
             doc["event"]["duration"] = int(rec["duration"] * 1e9)
         self.add("srv-mon-01_zeek-conn.log", t, text, label, doc)
+
+    # ---- Perimeter firewall fw-edge-01 (pfSense filterlog, CSV after the syslog header)
+    EDGE_RULES = {"web": (1000000101, "WAN allow DMZ web/mail"), "rdp": (1000000107, "NAT RDP-TEMP (left open after a test)"),
+                  "out": (1000000110, "LAN allow outbound"), "ssh": (1000000112, "WAN allow SSH to web portal (legacy)"),
+                  "default": (1000000103, "Default deny"), "rate": (1000000120, "WAN SYN rate limit")}
+
+    def edge(self, t, action, direction, src, dst, sport, dport, rule="default", proto="tcp", label=None):
+        tracker, desc = self.EDGE_RULES[rule]
+        iface = "em0" if direction == "in" else "em1"
+        num, length = (6, 60) if proto == "tcp" else (17, 76)
+        tail = f",0,S,{rng2.randint(10**8, 4 * 10**9)},,64240,,mss;sackOK;TS;nop;wscale" if proto == "tcp" else f",{length - 28}"
+        csv = (f"5,,,{tracker},{iface},match,{action},{direction},4,0x0,,{rng2.randint(40, 128)},{rng2.randint(1, 65000)},0,DF,"
+               f"{num},{proto},{length},{src},{dst},{sport},{dport}{tail}")
+        text = f"{t:%Y-%m-%dT%H:%M:%S.%f}+00:00 fw-edge-01 filterlog[4401]: {csv}"
+        doc = ecs(t, "fw-edge-01", "pfsense.log", text, "network", ["connection", "allowed" if action == "pass" else "denied"],
+                  action, "success" if action == "pass" else "failure", source=endpoint(src, sport), destination=endpoint(dst, dport),
+                  network={"transport": proto, "direction": "inbound" if direction == "in" else "outbound"},
+                  rule={"id": str(tracker), "name": desc}, observer={"hostname": "fw-edge-01", "type": "firewall", "vendor": "pfSense"})
+        self.add("fw-edge-01_filterlog.log", t, text, label, doc)
 
     # ---- Mail security gateway
     def mail(self, t, direction, client_ip, helo, frm, to, subject, verdict="clean", action="delivered", score=None,
@@ -382,10 +455,20 @@ def proc_start(host, t, image, cmd, user, parent, parent_cmd=None, label=None, s
                                                           "CommandLine": cmd, "ParentProcessName": parent}, label=label)
 
 
-def conn(src_host, dst_host, port, t, proto="TCP", label=None, src_ip=None, image=None, user=None, state="SF"):
-    """One connection, written to every log that would see it: source/destination host firewall, Sysmon, Zeek."""
+def _internal_ip(ip: str) -> bool:
+    return str(ip).startswith("10.24.")
+
+
+def conn(src_host, dst_host, port, t, proto="TCP", label=None, src_ip=None, image=None, user=None, state="SF", size=None):
+    """One connection, written to every log that would see it: perimeter firewall (if it crosses it), source and
+    destination host firewall, Sysmon, Zeek. size = bytes sent by the source (for large uploads)."""
     s_ip = src_ip or IP.get(src_host, src_host)   # outside addresses have no device entry
     d_ip = IP[dst_host] if dst_host in IP else dst_host
+    if _internal_ip(s_ip) != _internal_ip(d_ip):  # crosses the perimeter firewall
+        inbound = not _internal_ip(s_ip)
+        rule = ("web" if port in (25, 443) else "rdp" if port == 3389 else "ssh" if port == 22 else "default") if inbound else "out"
+        L.edge(t - timedelta(milliseconds=20), "pass" if state == "SF" else "block", "in" if inbound else "out", s_ip, d_ip,
+               rng2.randint(1024, 65000), port, rule, proto.lower(), label)
     sport = rng.randint(49152, 65000)
     sb, db = BY.get(src_host, {}), BY.get(dst_host, {})
     ok = state == "SF"
@@ -403,7 +486,7 @@ def conn(src_host, dst_host, port, t, proto="TCP", label=None, src_ip=None, imag
         L.wfw(dst_host, t + timedelta(milliseconds=300), "ALLOW" if ok else "DROP", proto, s_ip, d_ip, sport, port, "RECEIVE", label)
     if db.get("os") == "linux":
         L.ufw(dst_host, t + timedelta(milliseconds=300), "ALLOW" if ok else "BLOCK", s_ip, d_ip, sport, port, inbound=True, proto=proto, label=label)
-    L.flow(t, s_ip, sport, d_ip, port, proto, state, label)
+    L.flow(t, s_ip, sport, d_ip, port, proto, state, label, size)
 
 
 def logon(host, t, user, ltype, src_ip="-", ok=True, label=None):
@@ -719,6 +802,168 @@ def attacks():
                attachments=[{"name": "Invoice_4471.zip", "type": "application/zip", "sha256": sha("bad-zip")}], label="B4")
 
 
+# ======================================================================= depth: Kerberos, shares, admins, perimeter
+DC = "srv-auth-01"
+SCANNERS = [f"198.51.100.{i}" for i in range(40, 100)]          # internet background: scanners the edge blocks
+BOTS = [f"203.0.113.{i}" for i in range(160, 220)]               # A8 bot swarm
+EXFIL_DST = "203.0.113.99"
+
+
+def krb_tgt(t, user, ip, label=None):
+    L.win(DC, t, 4768, {"TargetUserName": user, "TargetDomainName": "BASE.EXAMPLE", "IpAddress": f"::ffff:{ip}", "IpPort": "0",
+                        "Status": "0x0", "TicketEncryptionType": "0x12", "PreAuthType": "2"}, label=label)
+
+
+def krb_service(t, user, ip, service, enc="0x12", label=None):
+    """4769: a Kerberos service ticket. 0x12 = AES (normal), 0x17 = RC4 (weak, what Kerberoasting asks for)."""
+    L.win(DC, t, 4769, {"TargetUserName": f"{user}@BASE.EXAMPLE", "TargetDomainName": "BASE.EXAMPLE", "ServiceName": service,
+                        "IpAddress": f"::ffff:{ip}", "IpPort": str(rng2.randint(49152, 65000)), "Status": "0x0",
+                        "TicketOptions": "0x40810000", "TicketEncryptionType": enc}, label=label)
+
+
+def share_access(host, t, user, ip, share, label=None):
+    L.win(host, t, 5140, {"SubjectUserName": user, "SubjectDomainName": "BASE", "ObjectType": "File", "IpAddress": ip,
+                          "IpPort": str(rng2.randint(49152, 65000)), "ShareName": share, "AccessMask": "0x1"}, label=label)
+
+
+def net_logon(host, t, user, ip, package="Kerberos", label=None):
+    """4624 type 3. NTLM with key length 0 from a workstation is what pass-the-hash looks like."""
+    ntlm = package == "NTLM"
+    L.win(host, t, 4624, {"TargetUserName": user, "TargetDomainName": "BASE", "IpAddress": ip, "LogonType": "3",
+                          "LogonProcessName": "NtLmSsp" if ntlm else "Kerberos", "AuthenticationPackageName": package,
+                          "KeyLength": "0" if ntlm else "128", "WorkstationName": HOST_OF_IP.get(ip, "-")}, label=label)
+
+
+def psexec_service(host, t, label=None):
+    L.win(host, t, 7045, {"ServiceName": "PSEXESVC", "ImagePath": "%SystemRoot%\\PSEXESVC.exe", "ServiceType": "user mode service",
+                          "StartType": "demand start", "AccountName": "LocalSystem"}, "System", label=label)
+
+
+def group_add(host, t, actor, member, group, eid=4728, label=None):
+    L.win(host, t, eid, {"SubjectUserName": actor, "SubjectDomainName": "BASE", "MemberName": f"CN={member},OU=Users,DC=base,DC=example",
+                         "TargetUserName": group, "TargetDomainName": "BASE"}, label=label)
+
+
+def normal_depth(day):
+    """Background that makes the base realistic and gives every agent something normal to learn."""
+    for d in WS:                                                     # every logon: a Kerberos TGT + service tickets
+        h, user, ip = d["host"], d["users"][0], d["ip"]
+        t = day + timedelta(seconds=rng2.uniform(7.4 * 3600, 8.9 * 3600))
+        krb_tgt(t, user, ip)
+        for k, svc in enumerate(["srv-auth-01$", "FS-01$"] + (["PRINT-01$"] if int(h[-3:]) % 3 == 0 else [])):
+            krb_service(t + timedelta(seconds=3 + 7 * k), user, ip, svc)
+        share_access("FS-01", t + timedelta(minutes=rng2.randint(2, 30)), user, ip, "\\\\*\\Logistics")
+        if len(d["users"]) > 1 and d["users"][1].startswith("op_night"):  # night shift on the same PC
+            nt = at(day, 20, 2, rng2.randint(0, 50))
+            krb_tgt(nt, d["users"][1], ip)
+            krb_service(nt + timedelta(seconds=4), d["users"][1], ip, "srv-auth-01$")
+    for h in (d["host"] for d in LNX):                               # admin works as root on purpose (from the jump host)
+        L.lx(h, "auth.log", at(day, 11, 23, rng2.randint(0, 50)), "sudo",
+             "adm.ops : TTY=pts/0 ; PWD=/home/adm.ops ; USER=root ; COMMAND=/bin/bash")
+    for _ in range(250):                                             # internet noise the perimeter firewall drops
+        t = day + timedelta(seconds=rng2.uniform(0, 86399))
+        L.edge(t, "block", "in", rng2.choice(SCANNERS), rng2.choice([IP["srv-web-01"], IP["srv-mail-01"]]), rng2.randint(1024, 65000),
+               rng2.choice([22, 23, 445, 1433, 3389, 5900, 8080]))
+
+
+PSEXEC_CHG = ("CHG-2026-1122-04", at(DAY2, 10, 30), at(DAY2, 11, 15))
+
+
+def maintenance_depth():
+    """Look-alikes that must stay quiet."""
+    jump, lab = IP["JUMP-01"], "psexec-change"
+    # B5: IT admin uses PsExec from the jump host to fix the print spooler, and a helpdesk RDP session, under a ticket
+    proc_start("JUMP-01", at(DAY2, 10, 34, 50), "C:\\Tools\\Sysinternals\\PsExec64.exe",
+               "PsExec64.exe \\\\PRINT-01 -s sc config spooler start= auto", "adm.win", EXPLORER, label=lab)
+    conn("JUMP-01", "PRINT-01", 445, at(DAY2, 10, 35), label=lab, user="BASE\\adm.win", image="System")
+    net_logon("PRINT-01", at(DAY2, 10, 35, 1), "adm.win", jump, label=lab)
+    L.win("PRINT-01", at(DAY2, 10, 35, 2), 4672, {"SubjectUserName": "adm.win"}, label=lab)
+    share_access("PRINT-01", at(DAY2, 10, 35, 3), "adm.win", jump, "\\\\*\\ADMIN$", label=lab)
+    psexec_service("PRINT-01", at(DAY2, 10, 35, 5), label=lab)
+    conn("JUMP-01", "WS-BASE-021", 3389, at(DAY2, 10, 42), label=lab, user="BASE\\adm.win")
+    logon("WS-BASE-021", at(DAY2, 10, 42, 3), "adm.win", 10, jump, label=lab)
+    L.win("WS-BASE-021", at(DAY2, 10, 42, 4), 4672, {"SubjectUserName": "adm.win"}, label=lab)
+    L.win("WS-BASE-021", at(DAY2, 10, 58), 4634, {"TargetUserName": "adm.win", "LogonType": "10"}, label=lab)
+    # B6: helpdesk adds a new colleague to a normal (not privileged) group
+    group_add(DC, at(DAY2, 9, 20), "k.zeqiri", "g.beqiri", "Gate Operators", label="B6")
+
+
+def attacks_depth():
+    # ---------------- A5: password guessing -> credential theft -> pass-the-hash + PsExec -> Domain Admins -> ransomware
+    src, ws, ip_src, ip_ws = "WS-BASE-019", "WS-BASE-021", IP["WS-BASE-019"], IP["WS-BASE-021"]
+    for k in range(7):
+        t = at(DAY2, 16, 5) + timedelta(seconds=13 * k)
+        conn(src, ws, 3389, t - timedelta(seconds=1), label="A5:entry", user="BASE\\u.rama")
+        logon(ws, t, "z.haliti", 10, ip_src, ok=False, label="A5:entry")
+    conn(src, ws, 3389, at(DAY2, 16, 6, 39), label="A5:entry", user="BASE\\u.rama")
+    logon(ws, at(DAY2, 16, 6, 40), "z.haliti", 10, ip_src, label="A5:entry")
+    proc_start(ws, at(DAY2, 16, 8, 30), "C:\\Windows\\System32\\cmd.exe", "\"C:\\Windows\\system32\\cmd.exe\"", "z.haliti", EXPLORER,
+               label="A5:execution")
+    rundll = "C:\\Windows\\System32\\rundll32.exe"
+    proc_start(ws, at(DAY2, 16, 9), rundll, "rundll32.exe C:\\Windows\\System32\\comsvcs.dll, MiniDump 712 C:\\Users\\Public\\m.dmp full",
+               "z.haliti", "C:\\Windows\\System32\\cmd.exe", label="A5:credential")
+    L.sysmon(ws, at(DAY2, 16, 9, 1), 10, {"SourceProcessGUID": guid(), "SourceProcessId": pid(), "SourceImage": rundll,
+                                          "TargetProcessGUID": guid(), "TargetProcessId": 712, "TargetImage": "C:\\Windows\\system32\\lsass.exe",
+                                          "GrantedAccess": "0x1FFFFF", "SourceUser": "BASE\\z.haliti", "TargetUser": "NT AUTHORITY\\SYSTEM",
+                                          "CallTrace": "C:\\Windows\\SYSTEM32\\ntdll.dll+9d1e4|C:\\Windows\\System32\\comsvcs.dll+2a3b1"},
+             "A5:credential")
+    L.sysmon(ws, at(DAY2, 16, 9, 4), 11, {"ProcessGuid": guid(), "ProcessId": pid(), "Image": rundll,
+                                          "TargetFilename": "C:\\Users\\Public\\m.dmp", "User": "BASE\\z.haliti"}, "A5:credential")
+    dc2 = IP["DC-02"]
+    L.win(ws, at(DAY2, 16, 14), 4648, {"SubjectUserName": "z.haliti", "TargetUserName": "adm.win", "TargetDomainName": "BASE",
+                                       "TargetServerName": "DC-02", "ProcessName": "C:\\Windows\\System32\\cmd.exe"}, label="A5:lateral")
+    conn(ws, "DC-02", 445, at(DAY2, 16, 14, 2), label="A5:lateral", user="BASE\\adm.win", image="System")
+    net_logon("DC-02", at(DAY2, 16, 14, 3), "adm.win", ip_ws, package="NTLM", label="A5:lateral")
+    L.win("DC-02", at(DAY2, 16, 14, 3, ), 4672, {"SubjectUserName": "adm.win"}, label="A5:lateral")
+    share_access("DC-02", at(DAY2, 16, 14, 5), "adm.win", ip_ws, "\\\\*\\ADMIN$", label="A5:lateral")
+    psexec_service("DC-02", at(DAY2, 16, 14, 8), label="A5:lateral")
+    psexesvc = "C:\\Windows\\PSEXESVC.exe"
+    proc_start("DC-02", at(DAY2, 16, 16), "C:\\Windows\\System32\\net.exe", "net user svc_upd ******** /add /domain", "adm.win", psexesvc,
+               label="A5:privilege")
+    L.win("DC-02", at(DAY2, 16, 16, 2), 4720, {"TargetUserName": "svc_upd", "TargetDomainName": "BASE", "SubjectUserName": "adm.win"},
+          label="A5:privilege")
+    proc_start("DC-02", at(DAY2, 16, 16, 30), "C:\\Windows\\System32\\net.exe", "net group \"Domain Admins\" svc_upd /add /domain",
+               "adm.win", psexesvc, label="A5:privilege")
+    group_add("DC-02", at(DAY2, 16, 16, 31), "adm.win", "svc_upd", "Domain Admins", label="A5:privilege")
+    conn("DC-02", "FS-01", 445, at(DAY2, 16, 21), label="A5:lateral", user="BASE\\svc_upd", image="System")
+    net_logon("FS-01", at(DAY2, 16, 21, 1), "svc_upd", dc2, label="A5:lateral")
+    L.win("FS-01", at(DAY2, 16, 21, 2), 4672, {"SubjectUserName": "svc_upd"}, label="A5:lateral")
+    share_access("FS-01", at(DAY2, 16, 21, 3), "svc_upd", dc2, "\\\\*\\C$", label="A5:lateral")
+    psexec_service("FS-01", at(DAY2, 16, 21, 6), label="A5:lateral")
+    for k, (img, cmd) in enumerate([("vssadmin.exe", "vssadmin.exe delete shadows /all /quiet"), ("wbadmin.exe", "wbadmin delete catalog -quiet"),
+                                    ("bcdedit.exe", "bcdedit /set {default} recoveryenabled No")]):
+        proc_start("FS-01", at(DAY2, 16, 24, 10 * k), f"C:\\Windows\\System32\\{img}", cmd, "svc_upd", psexesvc, label="A5:impact")
+    payload = "C:\\ProgramData\\svcupd\\upd.exe"
+    proc_start("FS-01", at(DAY2, 16, 25), payload, "upd.exe -p D:\\Shares", "svc_upd", psexesvc, label="A5:impact")
+    for k in range(150):
+        folder = ["Orders", "Fuel", "Rosters", "Maintenance", "Convoys"][k % 5]
+        ext = ["xlsx", "docx", "pdf", "csv"][k % 4]
+        L.sysmon("FS-01", at(DAY2, 16, 25, 5) + timedelta(seconds=1.1 * k), 11,
+                 {"ProcessGuid": guid(), "ProcessId": 6644, "Image": payload, "User": "BASE\\svc_upd",
+                  "TargetFilename": f"D:\\Shares\\Logistics\\{folder}\\file_{k:04d}.{ext}.locked"}, "A5:impact")
+    L.sysmon("FS-01", at(DAY2, 16, 28, 30), 11, {"ProcessGuid": guid(), "ProcessId": 6644, "Image": payload, "User": "BASE\\svc_upd",
+                                                 "TargetFilename": "D:\\Shares\\Logistics\\README_RESTORE.txt"}, "A5:impact")
+
+    # ---------------- A6: Kerberoasting -> cracked service account -> database dump -> large upload at night
+    ws6, ip6, db = "WS-BASE-009", IP["WS-BASE-009"], "srv-logistics-db"
+    for k, svc in enumerate(["svc_sql", "svc_web", "svc_c2", "svc_report"]):
+        t = at(DAY2, 23, 5) + timedelta(seconds=6 * k)
+        conn(ws6, DC, 88, t - timedelta(milliseconds=200), label="A6:credential", user="BASE\\j.osmani", image="C:\\Users\\Public\\r.exe")
+        krb_service(t, "j.osmani", ip6, svc, enc="0x17", label="A6:credential")
+    conn(ws6, db, 22, at(DAY2, 23, 41), label="A6:lateral", user="BASE\\j.osmani")
+    L.lx(db, "auth.log", at(DAY2, 23, 41, 2), "sshd[7311]", f"Accepted password for svc_sql from {ip6} port 55102 ssh2", "A6:lateral")
+    L.lx(db, "auth.log", at(DAY2, 23, 42), "sudo",
+         "svc_sql : TTY=pts/3 ; PWD=/home/svc_sql ; USER=postgres ; COMMAND=/usr/bin/pg_dump -Fc logistics -f /tmp/.l.dump", "A6:collection")
+    L.lx(db, "auth.log", at(DAY2, 23, 44), "sudo", "svc_sql : TTY=pts/3 ; PWD=/home/svc_sql ; USER=root ; COMMAND=/bin/bash", "A6:privilege")
+    conn(db, EXFIL_DST, 443, at(DAY2, 23, 47), label="A6:exfil", size=486_000_000)
+
+    # ---------------- A8: bot swarm against the web portal: 60 internet addresses within 90 s, dropped by the edge
+    for k, bot in enumerate(BOTS):
+        for _ in range(rng2.randint(1, 3)):
+            L.edge(at(DAY2, 12, 0) + timedelta(seconds=1.5 * k + rng2.uniform(0, 1)), "block", "in", bot, IP["srv-web-01"],
+                   rng2.randint(1024, 65000), 443, "rate", label="A8")
+
+
 # ======================================================================= truth: what was planted, with ATT&CK
 TRUTH = {
     "attacks": {
@@ -739,29 +984,52 @@ TRUTH = {
                "hosts": ["WS-BASE-007", "srv-mail-01"], "accounts": ["h.rexhepi"], "ips": [PHISH_MTA, C2_SERVER],
                "start": at(DAY2, 13, 2).isoformat(), "end": at(DAY2, 16, 45).isoformat(),
                "techniques": ["T1566.001", "T1204.002", "T1059.001", "T1105", "T1053.005", "T1071.001", "T1573"],
-               "sources": ["mail_gateway", "windows_sysmon", "windows_events", "windows_firewall", "zeek_conn"]}},
+               "sources": ["mail_gateway", "windows_sysmon", "windows_events", "windows_firewall", "zeek_conn"]},
+        "A5": {"title": "Domain takeover: RDP password guessing on WS-BASE-021 -> LSASS dump (comsvcs MiniDump) -> adm.win hash used "
+                        "on DC-02 (NTLM, PsExec) -> new account svc_upd added to Domain Admins -> PsExec to FS-01 -> shadow copies "
+                        "deleted -> 150 files encrypted (.locked) + ransom note",
+               "hosts": ["WS-BASE-019", "WS-BASE-021", "DC-02", "FS-01"], "accounts": ["z.haliti", "adm.win", "svc_upd"],
+               "ips": [IP["WS-BASE-019"]], "start": at(DAY2, 16, 5).isoformat(), "end": at(DAY2, 16, 28, 30).isoformat(),
+               "techniques": ["T1110.001", "T1078", "T1003.001", "T1550.002", "T1021.002", "T1569.002", "T1136.002", "T1098",
+                              "T1490", "T1486"],
+               "sources": ["windows_events", "windows_sysmon", "windows_firewall", "zeek_conn"]},
+        "A6": {"title": "Kerberoasting from WS-BASE-009 (4 RC4 service tickets in 20 s) -> cracked svc_sql logs on to srv-logistics-db "
+                        "by SSH -> pg_dump + root shell -> 486 MB uploaded to 203.0.113.99 at night",
+               "hosts": ["WS-BASE-009", "srv-auth-01", "srv-logistics-db"], "accounts": ["j.osmani", "svc_sql"], "ips": [EXFIL_DST],
+               "start": at(DAY2, 23, 5).isoformat(), "end": at(DAY2, 23, 57).isoformat(),
+               "techniques": ["T1558.003", "T1078", "T1021.004", "T1005", "T1548.003", "T1048"],
+               "sources": ["windows_events", "linux_auth", "linux_ufw", "zeek_conn", "pfsense_filterlog"]},
+        "A8": {"title": "Bot swarm: 60 internet addresses send SYNs to the web portal within 90 s; the perimeter drops them",
+               "hosts": ["srv-web-01", "fw-edge-01"], "ips": BOTS[:3], "start": at(DAY2, 12, 0).isoformat(),
+               "end": at(DAY2, 12, 1, 31).isoformat(), "techniques": ["T1498"], "sources": ["pfsense_filterlog"]}},
     "lookalikes": {
+        "B5": "IT admin uses PsExec from JUMP-01 on PRINT-01 and a helpdesk RDP session to WS-BASE-021, under ticket CHG-2026-1122-04",
+        "B6": "Helpdesk (k.zeqiri) adds a new colleague to 'Gate Operators', a normal group",
+        "kerberos": "Every logon requests Kerberos tickets with AES (0x12): normal, both days",
+        "sudo -i": "adm.ops opens a root shell on every Linux server at 11:23 from the jump host: normal for an admin, both days",
+        "edge noise": "~250 internet scans a day dropped by the perimeter firewall",
         "B1": "g.kelmendi mistypes the password 6 times on FS-01, then logs on (back from leave)",
         "B2": "Night admin RDP chain WS-BASE-001 -> JUMP-01 -> DC-02, new service + firewall rule, under emergency ticket CHG-2026-1122-03",
         "B3": "Weekly authenticated vulnerability scan from srv-mon-01 over all hosts and ports (CHG-VULNSCAN-WEEKLY)",
         "B4": "Malware mail campaign to 12 users, quarantined by the gateway (nobody received it)",
         "inventory.ps1": "Daily PowerShell -ExecutionPolicy Bypass inventory script on every workstation at 10:00 (both days)"},
-    "maintenance": {"patch": PATCH[0], "change": WEBCHG[0], "backup": "CHG-BACKUP-DAILY", "vulnscan": SCAN[0], "emergency": EMERG[0]},
+    "maintenance": {"patch": PATCH[0], "change": WEBCHG[0], "backup": "CHG-BACKUP-DAILY", "vulnscan": SCAN[0], "emergency": EMERG[0],
+                    "psexec-change": PSEXEC_CHG[0]},
     "silent_source": {"source": "srv-gate-ctrl-01-ufw", "from": at(DAY2, 2, 5).isoformat(), "to": at(DAY2, 4, 30).isoformat(),
                       "note": "A1 runs 'ufw logging off'; Zeek and the workstation's firewall still see the traffic to port 4444"},
-    "expected": {"incidents": 4, "false_incidents_max": 0,
-                 "suppressed": ["patch", "change", "backup", "vulnscan", "emergency"]},
+    "expected": {"incidents": 7, "false_incidents_max": 1,
+                 "suppressed": ["patch", "change", "backup", "vulnscan", "emergency", "psexec-change"]},
 }
 
 
 # ======================================================================= write everything
-NEW_KINDS = {"sysmon.jsonl", "zeek-conn.log", "mailgw.jsonl"}
+NEW_KINDS = {"sysmon.jsonl", "zeek-conn.log", "mailgw.jsonl", "filterlog.log"}
 LEGACY = False   # --legacy: keep the new sources out of sources.yaml (for engines without their parsers)
 PARSER = {"events.jsonl": "windows_events", "pfirewall.log": "windows_firewall", "auth.log": "linux_auth", "ufw.log": "linux_ufw",
           "syslog": "linux_syslog", "dpkg.log": "linux_dpkg", "sysmon.jsonl": "windows_sysmon", "zeek-conn.log": "zeek_conn",
-          "mailgw.jsonl": "mail_gateway"}
+          "mailgw.jsonl": "mail_gateway", "filterlog.log": "pfsense_filterlog"}
 EVERY = {"events.jsonl": 240, "pfirewall.log": 60, "auth.log": 90, "ufw.log": 15, "syslog": 720, "dpkg.log": 2880,
-         "sysmon.jsonl": 240, "zeek-conn.log": 5, "mailgw.jsonl": 60}
+         "sysmon.jsonl": 240, "zeek-conn.log": 5, "mailgw.jsonl": 60, "filterlog.log": 60}
 
 
 def _source_name(fname):
@@ -812,7 +1080,11 @@ def write_settings():
     assets = {"night_hours": [20, 6], "admin_ips": [IP["JUMP-01"]], "scanner_ips": [IP["srv-mon-01"]],
               "internal_nets": ["10.24.0.0/16"], "mail_domain": DOMAIN,
               "public_services": [{"host": "srv-web-01", "ports": [443]}, {"host": "srv-mail-01", "ports": [25]}],
-              "assets": [{"host": d["host"], "ip": d["ip"], "os": d["os"], "role": d["role"], "criticality": d["criticality"]} for d in DEV]}
+              "assets": [{"host": d["host"], "ip": d["ip"], "os": d["os"], "role": d["role"], "criticality": d["criticality"]} for d in DEV],
+              "privileged_groups": PRIVILEGED_GROUPS,
+              "users": DIRECTORY,
+              "zones": [{"name": n, "cidr": c} for n, c in ZONES],
+              "zone_policy": ZONE_POLICY}
     win_hosts, lnx_hosts = [d["host"] for d in WIN], [d["host"] for d in LNX]
     maintenance_cfg = {"tickets": [
         {"id": PATCH[0], "title": "Monthly patching: Windows Update + apt", "hosts": win_hosts + lnx_hosts,
@@ -835,14 +1107,22 @@ def write_settings():
          "allow": [{"type": "auth", "user": ["a.krasniqi", "adm.win"]},
                    {"type": "network", "dst_ip": [IP["JUMP-01"], IP["DC-02"]], "dst_port": [3389]},
                    {"action": "service-installed", "service": ["ADHealthAgent"], "path|startswith": ["C:\\Program Files\\AD Health\\"]},
-                   {"action": "firewall-change", "user": ["adm.win"], "detail|contains": ["AD Health Agent"]}]}]}
+                   {"action": "firewall-change", "user": ["adm.win"], "detail|contains": ["AD Health Agent"]}]},
+        {"id": PSEXEC_CHG[0], "title": "Fix print spooler on PRINT-01 with PsExec; helpdesk session on WS-BASE-021 (adm.win from JUMP-01)",
+         "hosts": ["JUMP-01", "PRINT-01", "WS-BASE-021"], "start": PSEXEC_CHG[1].isoformat(), "end": PSEXEC_CHG[2].isoformat(),
+         "allow": [{"type": "auth", "user": ["adm.win"], "src_ip": [IP["JUMP-01"]]},
+                   {"action": "share-access", "user": ["adm.win"], "src_ip": [IP["JUMP-01"]]},
+                   {"action": "service-installed", "service": ["PSEXESVC"]},
+                   {"type": "process", "path|contains": ["PsExec"], "user": ["adm.win"]},
+                   {"type": "network", "src_ip": [IP["JUMP-01"]]}]}]}
     for name, obj in (("sources.yaml", {"baseline_hours": 24, "sources": known}),
                       ("sources_extra.yaml", {"note": "new log sources; add a parser/agent for each, then move them into sources.yaml",
                                               "sources": extra}),
                       ("assets.yaml", assets), ("maintenance.yaml", maintenance_cfg)):
         (OUT / name).write_text(yaml.safe_dump(obj, sort_keys=False, allow_unicode=True), encoding="utf-8")
     inv = [{k: d[k] for k in ("host", "ip", "os", "type", "role", "criticality", "users")} for d in DEV]
-    (OUT.parent / "inventory.json").write_text(json.dumps({"devices": inv}, indent=2), encoding="utf-8")
+    (OUT.parent / "inventory.json").write_text(json.dumps({"devices": inv, "users": DIRECTORY,
+                                                           "zones": dict(ZONES)}, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
@@ -858,6 +1138,10 @@ if __name__ == "__main__":
     normal_day(DAY2)
     maintenance()
     attacks()
+    normal_depth(DAY1)          # added depth: drawn from rng2, so the scenarios above keep their exact timings
+    normal_depth(DAY2)
+    maintenance_depth()
+    attacks_depth()
     n = write()
     files = len([f for f in OUT.glob("*_*") if f.suffix != ".yaml"])
     print(f"{n:,} log lines in {files} files for {len(DEV)} devices -> {OUT}")

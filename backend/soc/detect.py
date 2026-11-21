@@ -7,7 +7,7 @@ Five rule types (all deterministic, so the same logs always give the same alerts
   sequence   steps in order, same field values, within a time   e.g. failed logons, then a success
   new_value  something never seen during the baseline           e.g. a laptop talks to a new machine
 
-Conditions:  field: value | field: [a, b] (any of) | modifiers: field|not, |startswith, |contains, |re, |exists
+Conditions:  field: value | field: [a, b] (any of) | modifiers: field|not, |startswith, |contains, |re, |exists, |gte, |lte
 A field that is missing never matches a positive condition.
 """
 from __future__ import annotations
@@ -24,6 +24,7 @@ from .events import show
 
 SYSTEM_USERS = {"SYSTEM", "LocalSystem", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON", "root"}
 DEFAULT_INTERNAL = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+DEFAULT_PRIVILEGED_GROUPS = ["Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators", "Backup Operators", "sudo", "wheel"]
 
 
 def _internal(ip: str, nets: list) -> bool | None:
@@ -47,9 +48,20 @@ def enrich(events: list[dict], assets: dict) -> None:
     nets = [ipaddress.ip_network(n) for n in assets.get("internal_nets", DEFAULT_INTERNAL)]
     public = {(p["host"].lower(), int(port)) for p in assets.get("public_services", []) for port in p.get("ports", [])}
     night_from, night_to = assets.get("night_hours", [20, 6])
+    users = {str(u["user"]).lower(): u for u in assets.get("users", []) if u.get("user")}
+    privileged_groups = {str(g).lower() for g in assets.get("privileged_groups", DEFAULT_PRIVILEGED_GROUPS)}
+    zones = Zones(assets)
     for e in events:
         h = e["time"].hour
         e["night"] = h >= night_from or h < night_to
+        u = users.get(str(e.get("user", "")).lower())
+        if u:                                   # who the account is (assets.yaml users)
+            e["user_role"] = u.get("role", "")
+            e["user_privileged"] = bool(u.get("privileged"))
+            e["user_service"] = "service" in str(u.get("role", "")).lower() or u.get("interactive") is False
+            e["user_home"] = u.get("home")
+        if e.get("group"):
+            e["privileged_group"] = str(e["group"]).lower() in privileged_groups
         for side in ("src", "dst"):
             ip = e.get(f"{side}_ip")
             if ip:
@@ -67,6 +79,43 @@ def enrich(events: list[dict], assets: dict) -> None:
             # outside visitors on a port the server offers to the internet on purpose: normal, not "new" each time
             target = str(e.get("dst_host") or e.get("host", "")).lower()
             e["public_service"] = (e.get("src_internal") is False and (target, e.get("dst_port")) in public)
+            if zones.active and e.get("src_ip") and e.get("dst_ip"):
+                zs, zd = zones.zone(e["src_ip"]), zones.zone(e["dst_ip"])
+                if zs:
+                    e["src_zone"] = zs
+                if zd:
+                    e["dst_zone"] = zd
+                if zs and zd and zs != zd:      # crossing zones: does the firewall policy allow it?
+                    e["zone_allowed"] = zones.allowed(zs, zd, e.get("src_host"), e.get("dst_host"), e.get("dst_port"))
+
+
+class Zones:
+    """Network zones and the policy between them (assets.yaml zones + zone_policy).
+
+    zone_policy: [{from, to, ports}] where from/to is a zone name, a host name or "any". Traffic inside one zone is
+    always allowed; anything between zones that no entry allows is a policy violation (often lateral movement).
+    """
+
+    def __init__(self, assets: dict):
+        self.nets = [(z["name"], ipaddress.ip_network(z["cidr"])) for z in assets.get("zones", []) if z.get("cidr")]
+        self.policy = assets.get("zone_policy", [])
+        self.active = bool(self.nets and self.policy)
+        self._cache: dict[str, str | None] = {}
+
+    def zone(self, ip: str) -> str | None:
+        if ip not in self._cache:
+            try:
+                a = ipaddress.ip_address(ip)
+                self._cache[ip] = next((name for name, net in self.nets if a in net), None)
+            except ValueError:
+                self._cache[ip] = None
+        return self._cache[ip]
+
+    def allowed(self, zs: str, zd: str, hs: str | None, hd: str | None, port) -> bool:
+        def side(want, zone, host):
+            return want == "any" or want == zone or (host is not None and str(want).lower() == str(host).lower())
+        return any(side(p.get("from"), zs, hs) and side(p.get("to"), zd, hd) and (not p.get("ports") or port in p["ports"])
+                   for p in self.policy)
 
 
 def _cond(e: dict, key: str, want) -> bool:
@@ -88,6 +137,11 @@ def _cond(e: dict, key: str, want) -> bool:
         return any(str(w).lower() in s for w in wants)
     if mod == "re":
         return any(re.search(str(w), str(v)) for w in wants)
+    if mod in ("gte", "lte"):
+        try:
+            return any((float(v) >= float(w)) if mod == "gte" else (float(v) <= float(w)) for w in wants)
+        except (TypeError, ValueError):
+            return False
     raise ValueError(f"unknown condition modifier |{mod}")
 
 

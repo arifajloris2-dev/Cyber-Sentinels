@@ -15,7 +15,8 @@ from soc.pipeline import run
 
 REPO = Path(__file__).resolve().parents[3]
 GENERATOR = REPO / "backend" / "soc" / "fleet" / "make_fleet.py"
-MAINTENANCE = ["patch", "backup", "change", "vulnscan", "emergency"]
+MAINTENANCE = ["patch", "backup", "change", "vulnscan", "emergency", "psexec-change"]
+ATTACKS = ["A1", "A2", "A3", "A4", "A5", "A6", "A8"]
 
 pytestmark = pytest.mark.skipif(not GENERATOR.exists(), reason="backend/soc/fleet/make_fleet.py not present")
 
@@ -43,7 +44,7 @@ def _incident_of(r, truth, attack):
     return hits[0]
 
 
-@pytest.mark.parametrize("attack", ["A1", "A2", "A3", "A4"])
+@pytest.mark.parametrize("attack", ATTACKS)
 def test_every_planted_attack_is_one_incident(fleet, attack):
     truth, r = fleet
     _incident_of(r, truth, attack)
@@ -51,7 +52,7 @@ def test_every_planted_attack_is_one_incident(fleet, attack):
 
 def test_attacks_are_separate_incidents(fleet):
     truth, r = fleet
-    assert len({_incident_of(r, truth, a)["id"] for a in ("A1", "A2", "A3", "A4")}) == 4
+    assert len({_incident_of(r, truth, a)["id"] for a in ATTACKS}) == len(ATTACKS)
 
 
 def test_night_chain_has_entry_lateral_and_impact_across_windows_and_ubuntu(fleet):
@@ -73,7 +74,7 @@ def test_phishing_chain_joins_mail_endpoint_and_network(fleet):
 
 def test_at_most_one_false_incident(fleet):
     truth, r = fleet
-    attack_lines = _lines(truth, "A1") | _lines(truth, "A2") | _lines(truth, "A3") | _lines(truth, "A4")
+    attack_lines = set().union(*(_lines(truth, a) for a in ATTACKS))
     false = [i["title"] for i in r["incidents"] if not _ids(i) & attack_lines]
     assert len(false) <= 1, false
 
@@ -92,3 +93,31 @@ def test_only_the_real_outage_is_reported_and_it_lowers_confidence(fleet):
     assert silent == [truth["silent_source"]["source"]]
     inc = _incident_of(r, truth, "A1")
     assert inc["confidence"] < 1 and any(truth["silent_source"]["source"] in w for w in inc["confidence_reasons"])
+
+
+def test_domain_takeover_chain_from_password_guessing_to_ransomware(fleet):
+    truth, r = fleet
+    inc = _incident_of(r, truth, "A5")
+    for step in ("A5:entry", "A5:credential", "A5:lateral", "A5:privilege", "A5:impact"):
+        assert _ids(inc) & set(truth["lines"][step]), f"no evidence for {step}"
+    rules = {a["rule"] for a in inc["alerts"]}
+    assert {"CRED-001", "LAT-002", "LAT-001", "PRIV-001", "IMP-001", "IMP-002"} <= rules
+    assert {"credential theft", "privilege escalation", "impact"} <= set(inc["stages"]) and inc["priority"] == "P1"
+    assert {"WS-BASE-021", "DC-02", "FS-01"} <= {h["host"] for h in inc["hosts"]}
+
+
+def test_kerberoasting_to_exfiltration(fleet):
+    truth, r = fleet
+    inc = _incident_of(r, truth, "A6")
+    assert {"CRED-003", "AUTH-005", "PRIV-002", "EXF-001", "NET-008"} <= {a["rule"] for a in inc["alerts"]}
+
+
+def test_zone_policy_violation_is_part_of_the_night_chain(fleet):
+    truth, r = fleet
+    assert "NET-008" in {a["rule"] for a in _incident_of(r, truth, "A1")["alerts"]}
+
+
+def test_admin_psexec_under_ticket_and_helpdesk_group_change_stay_quiet(fleet):
+    truth, r = fleet
+    quiet = set(truth["lines"]["psexec-change"]) | set(truth["lines"]["B6"])
+    assert not {e["id"] for a in r["alerts"] for e in a["evidence"]} & quiet

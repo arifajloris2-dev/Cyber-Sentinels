@@ -1,0 +1,39 @@
+# Lateral movement: remote execution, pass-the-hash, admin shares, and traffic the zone policy does not allow.
+rules:
+  - id: LAT-001
+    type: match
+    short: remote execution (PsExec)
+    title: Remote execution service installed (PsExec and similar)
+    attack: [T1569.002, T1021.002]
+    severity: 7
+    where: {type: config, action: service-installed, service|re: ["(?i)^(PSEXESVC|PAEXEC|RemCom|csexec|BTOBTO)"]}
+    text: "Remote execution service '{service}' installed on {host} at {first}"
+
+  - id: LAT-002
+    type: match
+    short: pass-the-hash
+    title: Privileged account logged on over the network with NTLM and no session key (pass-the-hash pattern)
+    attack: [T1550.002]
+    severity: 8
+    where: {type: auth, action: logon, outcome: success, logon: network, auth_package: NTLM, key_length: "0", user_privileged: true}
+    text: "{user} logged on to {host} from {src_ip} ({src_host}) with NTLM and key length 0 at {first}"
+
+  - id: LAT-003
+    type: match
+    short: admin share opened from a workstation
+    title: Administrative share (ADMIN$, C$) opened from a workstation
+    attack: [T1021.002]
+    severity: 6
+    where: {type: file, action: share-access, share|re: ["(?i)\\\\(ADMIN|C)\\$$"], src_role|contains: workstation}
+    text: "{user} opened {share} on {host} from {src_ip} ({src_host}) at {first}"
+
+  - id: NET-008
+    type: new_value
+    short: zone policy violation
+    title: Connection between network zones that the firewall policy does not allow
+    attack: [T1021]
+    severity: 6
+    night_bonus: 1
+    fields: [src_ip, dst_ip, dst_port]
+    where: {type: network, action: [allow, connect, flow], outcome: success, zone_allowed: false}
+    text: "{src_ip} ({src_host}, zone {src_zone}) -> {dst_ip} ({dst_host}, zone {dst_zone}) port {dst_port}: not allowed by the zone policy"

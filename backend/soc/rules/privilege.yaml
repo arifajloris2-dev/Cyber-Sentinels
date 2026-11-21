@@ -1,0 +1,41 @@
+# Privilege escalation and misuse of accounts (uses assets.yaml users + privileged_groups).
+rules:
+  - id: PRIV-001
+    type: match
+    short: added to a privileged group
+    title: Account added to a privileged group (Domain Admins, Administrators, sudo, ...)
+    attack: [T1098]
+    severity: 9
+    where: {type: config, action: group-member-added, privileged_group: true}
+    text: "{member} was added to privileged group '{group}' on {host} by {user} at {first}"
+
+  - id: PRIV-002
+    type: match
+    short: root shell by a normal account
+    title: Root shell or sudo-group change by an account that is not an admin
+    attack: [T1548.003]
+    severity: 7
+    night_bonus: 1
+    where: {os: linux, action: [root-shell, group-member-added], user_privileged|not: [true]}
+    text: "{user} ran '{detail}' as {run_as} on {host} at {first}: this account is not an administrator"
+
+  - id: PRIV-003
+    type: new_value
+    short: admin account used from a new place
+    title: Privileged account used from a machine it never used during the baseline
+    attack: [T1078.002]
+    severity: 6
+    night_bonus: 1
+    fields: [user, src_ip]
+    where: {type: auth, action: logon, outcome: success, user_privileged: true, logon: [remote, network, ssh]}
+    text: "Privileged account {user} logged on to {host} from {src_ip} ({src_host}): never seen from there during the baseline"
+
+  - id: AUTH-005
+    type: match
+    short: service account logged on interactively
+    title: Service account used for an interactive or SSH logon
+    attack: [T1078]
+    severity: 6
+    night_bonus: 1
+    where: {type: auth, action: logon, outcome: success, user_service: true, logon: [remote, ssh, local, unlock]}
+    text: "Service account {user} logged on to {host} interactively ({logon}) from {src_ip} at {first}: service accounts should not do that"
