@@ -2,6 +2,7 @@
 rules:
   - id: SYS-001
     type: match
+    short: system change
     title: New service installed (Windows)
     attack: [T1543.003]
     severity: 6
@@ -13,6 +14,7 @@ rules:
 
   - id: SYS-002
     type: new_value
+    short: system change
     title: Service started that never ran before (Ubuntu)
     attack: [T1543.002]
     severity: 6
@@ -23,6 +25,7 @@ rules:
 
   - id: SYS-003
     type: match
+    short: system change
     title: Firewall rule or setting changed
     attack: [T1562.004]
     severity: 6
@@ -34,6 +37,7 @@ rules:
 
   - id: SYS-004
     type: match
+    short: system change
     title: Security log cleared or audit policy changed
     attack: [T1070.001, T1562.002]
     severity: 8
@@ -42,6 +46,7 @@ rules:
 
   - id: SYS-005
     type: match
+    short: system change
     title: New local account created
     attack: [T1136.001]
     severity: 6

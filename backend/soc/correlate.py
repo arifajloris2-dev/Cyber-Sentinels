@@ -13,16 +13,39 @@ from .attack import STAGES, info
 from .health import silent_between
 
 LINK_WINDOW = timedelta(minutes=60)
+WEAK = 5   # alerts below this severity link only through a shared account or unknown address, never "same host" alone
 
 
 def link_reason(a: dict, b: dict) -> str | None:
+    """Why two alerts belong together, or None.
+
+    A busy host (web portal, mail gateway) collects many unrelated weak alerts; joining them only because they share
+    that host would build one giant false incident. So a weak alert needs a stronger tie: the same account or the
+    same unknown address.
+    """
     if a["time"] - LINK_WINDOW > b["time_end"] or b["time"] - LINK_WINDOW > a["time_end"]:
         return None
-    for field, label in (("users", "same account"), ("unknown_ips", "same unknown address"), ("hosts", "same host")):
+    ties = [("users", "same account"), ("unknown_ips", "same unknown address")]
+    if min(a["severity"], b["severity"]) >= WEAK:
+        ties.append(("hosts", "same host"))
+    for field, label in ties:
         shared = sorted(set(a[field]) & set(b[field]))
         if shared:
             return f"{label} {', '.join(shared)}"
     return None
+
+
+def _title(members: list[dict], stages: list[str], impact: list[str]) -> str:
+    """Short story of the incident from what the alerts actually saw, in stage order (e.g. 'Password guessing → ...')."""
+    parts = []
+    for s in stages:
+        for a in members:
+            if a["stage"] == s and (label := a.get("short") or a["title"]) not in parts:
+                parts.append(label)
+                break
+    title = " → ".join(parts)
+    title = title[:1].upper() + title[1:]
+    return title +(" on " + ", ".join(impact) if impact else "")
 
 
 def correlate(alerts: list[dict], assets: dict, health: list[dict], end: datetime) -> tuple[list[dict], list[dict]]:
@@ -63,9 +86,7 @@ def correlate(alerts: list[dict], assets: dict, health: list[dict], end: datetim
         score = sum(a["severity"] for a in members) + 5 * len(stages) + 3 * crit + (10 if len(hosts) > 1 else 0)
         conf, why = _confidence(members, hosts, health, start, stop)
         impact = sorted({h for a in members if a["stage"] == "impact" for h in a["hosts"] if h.lower() in known})
-        title = " → ".join({"entry": "Remote logon", "lateral movement": "lateral movement", "impact": "system change"}[s] for s in stages)
-        if impact:
-            title += " on " + ", ".join(impact)
+        title = _title(members, stages, impact)
         my_links = [l for l in links if l["from"] in ids]
         incidents.append({
             "id": f"INC-{start:%Y%m%d-%H%M}", "priority": "P1" if score >= 70 else "P2" if score >= 35 else "P3", "score": score,
