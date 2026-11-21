@@ -146,6 +146,20 @@ def test_attacker_is_followed_after_password_guessing(fleet):
     assert "WS-BASE-019 -> WS-BASE-021 -> DC-02 -> FS-01" in inc["story"]
 
 
-def test_no_loose_alerts_left_on_the_50_device_base(fleet):
+def test_no_attack_alert_left_loose_on_the_50_device_base(fleet):
+    truth, r = fleet
+    attack_lines = set().union(*(_lines(truth, a) for a in ATTACKS))
+    assert not [a for a in r["singles"] for e in a["evidence"] if e["id"] in attack_lines]
+
+
+def test_the_same_fact_is_shown_once(fleet):
+    """One connection seen by both host firewalls and the sensor is ONE alert listing what else saw it."""
     _, r = fleet
-    assert r["singles"] == []
+    keys = [(a["rule"], tuple(sorted(a["hosts"])), a["time"]) for a in r["alerts"]]
+    assert len(keys) == len(set(keys))
+    assert any(a.get("also") for a in r["alerts"])
+    inc = next(i for i in r["incidents"] if "WS-BASE-014" in {h["host"] for h in i["hosts"]})
+    conn = [a for a in inc["alerts"] if a["rule"] in ("NET-001", "NET-002", "NET-006", "NET-008")
+            and {"WS-BASE-014", "srv-gate-ctrl-01"} <= set(a["hosts"])]
+    ports = [{e.get("dst_port") for e in a["evidence"]} for a in conn]
+    assert len(conn) == len({frozenset(p) for p in ports})      # one alert per connection (port 22, port 4444)

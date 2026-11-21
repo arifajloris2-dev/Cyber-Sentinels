@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from . import agents, health, intel, knowledge, noise
+from . import agents, dedupe, health, intel, knowledge, noise
 from .correlate import correlate, priority
 from .detect import enrich, load_rules, run_rules
 from .parsers import read_all
@@ -60,7 +60,7 @@ def detect(folder: Path, until: datetime | None = None, loaded=None, rules_dir: 
 
     noise.tag(events, cfg["maintenance"])
     judged, approved = noise.split(events)
-    alerts = run_rules(judged, rules, baseline_end)
+    alerts = dedupe.merge(run_rules(judged, rules, baseline_end))   # one fact once, with everything that saw it
     # what the approved events WOULD have triggered: reported as suppressed, with the ticket
     would = run_rules([e for e in events if e["time"] < baseline_end] + approved, rules, baseline_end)
     by_id = {e["id"]: e for e in approved}

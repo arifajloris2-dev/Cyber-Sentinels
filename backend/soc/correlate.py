@@ -66,19 +66,30 @@ def _follow_links(alerts: list[dict]) -> list[tuple[int, int, str]]:
     return out
 
 
+MAX_TITLE_PARTS = 4
+GENERIC_LABELS = {"new inbound connection", "new internal service port", "lateral movement", "system change",
+                  "First logon of an account on a host", "blocked connection burst"}
+
+
 def priority(score: int) -> str:
     return "P1" if score >= 70 else "P2" if score >= 35 else "P3"
 
 
 def _title(members: list[dict], stages: list[str], impact: list[str]) -> str:
     """Short story of the incident from what the alerts actually saw, in stage order (e.g. 'Password guessing → ...')."""
-    parts = []
+    parts = []                                 # (label, severity): the most telling finding of each stage
     for s in stages:
-        for a in members:
-            if a["stage"] == s and (label := a.get("short") or a["title"]) not in parts:
-                parts.append(label)
+        cands = sorted((a for a in members if a["stage"] == s), key=lambda a: (-a["severity"], a["time"]))
+        for a in cands:
+            label = a.get("short") or a["title"]
+            if label not in [p for p, _ in parts]:
+                parts.append((label, a["severity"]))
                 break
-    title = " → ".join(parts)
+    if len(parts) > MAX_TITLE_PARTS:           # keep it readable: first and last step + the most severe in between
+        middle = [p for p in parts[1:-1] if p[0] not in GENERIC_LABELS] or parts[1:-1]
+        middle = sorted(middle, key=lambda p: -p[1])[:MAX_TITLE_PARTS - 2]
+        parts = [parts[0]] + [p for p in parts[1:-1] if p in middle] + [parts[-1]]
+    title = " → ".join(p for p, _ in parts)
     title = title[:1].upper() + title[1:]
     return title +(" on " + ", ".join(impact) if impact else "")
 
