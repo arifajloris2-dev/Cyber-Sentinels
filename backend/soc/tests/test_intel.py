@@ -75,3 +75,20 @@ def test_pipeline_uses_osint_file_in_the_log_folder_and_never_creates_incidents_
     r = run(logs)
     assert r["intel"]["source"].endswith(intel.FILE) and len(r["intel"]["findings"]) == 1
     assert len(r["incidents"]) == len(without["incidents"]) and all(i["intel"] == [] for i in r["incidents"])
+
+
+def test_new_osint_format_finding_type_and_ids(tmp_path):
+    """osint_agent.py writes threat_findings with finding_type (credential_exposure_osint) and its own FIND-... ids."""
+    new = {"threat_findings": [
+        {"id": "FIND-CVE-2025-4120", "finding_type": "vulnerability_exposure", "cve": "CVE-2025-4120", "cisa_kev": True,
+         "affected_assets": ["srv-gate-ctrl-01"], "mitre_techniques": ["T1543"]},
+        {"id": "FIND-osint-001-svc_ops_night", "finding_type": "credential_exposure_osint", "post_id": "osint-001",
+         "account": "svc_ops_night", "timestamp": "2026-11-20T01:55:00Z", "affected_assets": ["ws-base-014"],
+         "mitre_techniques": ["T1078", "T1110"]}],
+        "targeted_hunt_requests": []}
+    inc = _incident()
+    intel.attach([inc], _intel(tmp_path, new), priority)
+    assert [(x["id"], x["kind"]) for x in inc["intel"]] == [("FIND-CVE-2025-4120", "vulnerability"),
+                                                           ("FIND-osint-001-svc_ops_night", "credential")]
+    assert any("leaked on 2026-11-20" in s["step"] for s in inc["next_checks"])
+    assert not any("None" in s["step"] for s in inc["next_checks"])

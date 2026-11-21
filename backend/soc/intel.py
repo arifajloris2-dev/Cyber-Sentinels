@@ -1,7 +1,9 @@
 """Threat intel from the OSINT agent (Member 1), joined to the SOC incidents.
 
 Input: osint_output.json as written by backend/osint_agent.py:
-    structured_threat_findings   vulnerability_exposure (CVE on an asset) and credential_exposure (leaked account)
+    threat_findings (or structured_threat_findings)
+                                 a CVE on an asset (vulnerability_exposure) or a leaked account
+                                 (credential_exposure / credential_exposure_osint); field finding_type or type
     targeted_hunt_requests       "look in the logs for X on these assets" - addressed to the SOC
 Looked for in this order: <log folder>/osint_output.json, then backend/data/osint_output.json. No file: no intel.
 
@@ -19,7 +21,7 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 FILE = "osint_output.json"
-BONUS = {"vulnerability_exposure": 5, "vulnerability_exposure_kev": 10, "credential_exposure": 10}
+BONUS = {"vulnerability": 5, "kev": 10, "credential": 10}
 MAX_BONUS = 20
 
 
@@ -31,14 +33,28 @@ def load(folder: Path | None = None) -> dict:
                 d = json.loads(p.read_text(encoding="utf-8"))
             except (ValueError, OSError) as exc:
                 return {"source": str(p), "error": f"unreadable: {exc}", "findings": [], "hunts": []}
-            findings = [_finding(f, i) for i, f in enumerate(d.get("structured_threat_findings", []), 1)]
+            raw = d.get("threat_findings") or d.get("structured_threat_findings") or []
+            findings = [_finding(f, i) for i, f in enumerate(raw, 1)]
             return {"source": str(p), "findings": findings, "hunts": list(d.get("targeted_hunt_requests", []))}
     return {"source": None, "findings": [], "hunts": []}
 
 
+def _kind(f: dict) -> str:
+    """'credential' or 'vulnerability', whatever the OSINT agent calls it.
+
+    Old format: type = credential_exposure | vulnerability_exposure.
+    New format: finding_type = credential_exposure_osint | vulnerability_exposure (and an id like FIND-...).
+    """
+    t = str(f.get("finding_type") or f.get("type") or "").lower()
+    if "credential" in t or (f.get("account") and not f.get("cve")):
+        return "credential"
+    return "vulnerability"
+
+
 def _finding(f: dict, n: int) -> dict:
-    fid = f.get("cve") or (f"{f.get('post_id')}:{f.get('account')}" if f.get("account") else None) or f"finding-{n}"
-    return {**f, "id": fid}
+    fid = f.get("id") or f.get("cve") or (f"{f.get('post_id')}:{f.get('account')}" if f.get("account") else None) \
+        or f"finding-{n}"
+    return {**f, "id": fid, "kind": _kind(f)}
 
 
 def _tech_match(seen: set[str], wanted) -> list[str]:
@@ -66,7 +82,7 @@ def match(finding: dict, inc: dict) -> str | None:
     hosts, users, techs = _incident_view(inc)
     assets = _lower(finding.get("affected_assets"))
     shared = sorted(assets & hosts)
-    if finding.get("type") == "credential_exposure":
+    if finding.get("kind", _kind(finding)) == "credential":
         acc = str(finding.get("account", "")).lower()
         if acc and acc in users:
             where = f" (OSINT lists it for {', '.join(shared)})" if shared else ""
@@ -78,7 +94,7 @@ def match(finding: dict, inc: dict) -> str | None:
 
 
 def _check(f: dict, why: str) -> dict:
-    if f.get("type") == "credential_exposure":
+    if f.get("kind", _kind(f)) == "credential":
         when = f" on {f['timestamp'][:10]}" if f.get("timestamp") else ""
         return {"type": "contain, operator decides",
                 "step": f"OSINT: account {f.get('account')} was leaked{when} ({f.get('source', 'OSINT')}). "
@@ -95,11 +111,11 @@ def attach(incidents: list[dict], intel: dict, priority) -> None:
         inc["intel"], bonus = [], 0
         for f in intel.get("findings", []):
             if why := match(f, inc):
-                inc["intel"].append({"id": f["id"], "type": f.get("type"), "why": why, "summary": f.get("summary", ""),
+                inc["intel"].append({"id": f["id"], "type": f.get("finding_type") or f.get("type"), "kind": f["kind"],
+                                     "title": f.get("title"), "why": why, "summary": f.get("summary", ""),
                                      "cisa_kev": f.get("cisa_kev"), "epss_score": f.get("epss_score"),
                                      "confidence": f.get("confidence"), "techniques": f.get("mitre_techniques", [])})
-                key = "vulnerability_exposure_kev" if f.get("cisa_kev") else f.get("type", "")
-                bonus += BONUS.get(key, 5)
+                bonus += BONUS["credential" if f["kind"] == "credential" else "kev" if f.get("cisa_kev") else "vulnerability"]
                 step = _check(f, why)
                 if step not in inc.setdefault("next_checks", []):
                     inc["next_checks"].append(step)
