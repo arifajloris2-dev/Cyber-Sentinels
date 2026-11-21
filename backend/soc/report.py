@@ -44,6 +44,14 @@ def markdown(r: dict) -> str:
         for a in i["alerts"]:
             ev = ", ".join(e["id"] for e in a["evidence"][:4]) + (" …" if a["count"] > 4 else "")
             L.append(f"| {a['time']:%H:%M:%S} | {a['stage']} | {a['rule']} | {a['text']} | {ev} |")
+        if i.get("story"):
+            L += ["", f"**What happened:** {i['story']}"]
+        if i.get("path"):
+            L += ["", "**Attacker path:** " + " → ".join(
+                [i["path"][0]["from"]] + [f"{h['to']} ({'/'.join(map(str, h['ports'])) or '-'}"
+                                          f"{', as ' + ', '.join(h['accounts']) if h['accounts'] else ''})" for h in i["path"]])]
+        if i.get("escalation"):
+            L += ["", "**Rights gained or stolen:**"] + [f"- {e['time']:%H:%M} {e['what']}: {e['detail']}" for e in i["escalation"]]
         if i.get("intel"):
             L += ["", "**Threat intel (OSINT) that matches this incident:**"]
             L += [f"- `{x['id']}`: {x['why']}" + (f". {x['summary']}" if x.get("summary") else "") for x in i["intel"]]

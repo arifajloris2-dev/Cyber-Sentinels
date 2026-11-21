@@ -179,3 +179,19 @@ def test_criticality_scale_is_1_to_5_for_numbers_and_words():
     from soc.correlate import _criticality_rank
     assert [_criticality_rank(v) for v in (5, 4, 1, 9, 0, "5")] == [5, 4, 1, 5, 1, 5]
     assert [_criticality_rank(v) for v in ("critical", "high", "medium", "low", "unknown")] == [5, 4, 2, 1, 1]
+
+
+def test_followed_account_links_activity_hours_later():
+    from soc.correlate import correlate
+    seed = _alert("AUTH-001", 6, ["ws1"], users=["bob"], minute=0)
+    later = _alert("PRIV-002", 7, ["web"], users=["bob"], minute=300)             # 5 h later, other host
+    other = _alert("PRIV-002", 7, ["mail"], users=["alice"], minute=310)         # someone else, elsewhere: not linked
+    incidents, singles = correlate([seed, later, other], ASSETS, [], T0 + timedelta(hours=8))
+    assert len(incidents) == 1 and {a["rule"] for a in incidents[0]["alerts"]} == {"AUTH-001", "PRIV-002"}
+    assert incidents[0]["compromised_accounts"] == ["bob"] and singles == [other]
+
+
+def test_a_single_wrong_password_is_never_an_alert():
+    evs = [{"id": "t:1", "time": T0, "source": "t", "type": "auth", "action": "logon", "outcome": "failure", "logon": "remote",
+            "host": "ws1", "user": "bob", "src_ip": "10.1.3.9", "raw": "x", "line": 1}]
+    assert not _alerts(evs)

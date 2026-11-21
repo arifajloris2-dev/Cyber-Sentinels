@@ -133,3 +133,19 @@ def test_each_agent_reports_what_it_saw_on_the_50_device_base(fleet):
     assert "LSASS" in " ".join(by["endpoint"]["highlights"])
     assert by["host_firewall"]["silent_sources"] == [truth["silent_source"]["source"]]
     assert all(a["incidents"] for a in by.values())
+
+
+def test_attacker_is_followed_after_password_guessing(fleet):
+    """After the guessed logon, the incident shows where the account went and which rights it gained."""
+    truth, r = fleet
+    inc = _incident_of(r, truth, "A5")
+    hops = [(h["from"], h["to"]) for h in inc["path"]]
+    assert hops[:3] == [("WS-BASE-019", "WS-BASE-021"), ("WS-BASE-021", "DC-02"), ("DC-02", "FS-01")]
+    assert "z.haliti" in inc["compromised_accounts"]
+    assert {"CRED-001", "LAT-002", "PRIV-001"} <= {e["rule"] for e in inc["escalation"]}
+    assert "WS-BASE-019 -> WS-BASE-021 -> DC-02 -> FS-01" in inc["story"]
+
+
+def test_no_loose_alerts_left_on_the_50_device_base(fleet):
+    _, r = fleet
+    assert r["singles"] == []

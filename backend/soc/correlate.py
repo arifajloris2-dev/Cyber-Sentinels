@@ -43,7 +43,27 @@ def link_reason(a: dict, b: dict) -> str | None:
         shared = sorted(set(a[field]) & set(b[field]))
         if shared:
             return f"{label} {', '.join(shared)}"
+    # even a weak alert belongs when it is the SAME connection: both machines at its two ends are in the other alert
+    pair = sorted(set(a["hosts"]) & set(b["hosts"]))
+    if len(pair) >= 2:
+        return f"same connection {' <-> '.join(pair[:2])}"
     return None
+
+
+# An account counts as compromised after one of these; everything it does in the next FOLLOW_WINDOW joins the
+# incident, so the operator sees what the attacker did AFTER getting in (moved where, gained which rights).
+COMPROMISE_RULES = {"AUTH-001", "AUTH-002", "CRED-001", "CRED-002", "CRED-003", "LAT-002"}
+FOLLOW_WINDOW = timedelta(hours=12)
+
+
+def _follow_links(alerts: list[dict]) -> list[tuple[int, int, str]]:
+    seeds = [(i, a["time"], set(a["users"])) for i, a in enumerate(alerts) if a["rule"] in COMPROMISE_RULES and a["users"]]
+    out = []
+    for i, t0, accounts in seeds:
+        for j, b in enumerate(alerts):
+            if j != i and t0 <= b["time"] <= t0 + FOLLOW_WINDOW and (shared := accounts & set(b["users"])):
+                out.append((i, j, f"followed compromised account {', '.join(sorted(shared))}"))
+    return out
 
 
 def priority(score: int) -> str:
@@ -79,6 +99,10 @@ def correlate(alerts: list[dict], assets: dict, health: list[dict], end: datetim
             if reason := link_reason(a, alerts[j]):
                 links.append({"from": a["id"], "to": alerts[j]["id"], "reason": reason})
                 parent[root(i)] = root(j)
+    for i, j, reason in _follow_links(alerts):
+        if root(i) != root(j):
+            links.append({"from": alerts[i]["id"], "to": alerts[j]["id"], "reason": reason})
+            parent[root(i)] = root(j)
     groups = {}
     for i, a in enumerate(alerts):
         groups.setdefault(root(i), []).append(a)
@@ -109,7 +133,11 @@ def correlate(alerts: list[dict], assets: dict, health: list[dict], end: datetim
             )
             title = f"Possible bot swarm targeting {target}"
         my_links = [l for l in links if l["from"] in ids]
+        path, escalation = _attacker_path(members, known), _escalation(members)
+        compromised = sorted({u for a in members if a["rule"] in COMPROMISE_RULES for u in a["users"]})
         incidents.append({
+            "path": path, "escalation": escalation, "compromised_accounts": compromised,
+            "story": _story(members, path, escalation, compromised),
             "id": f"INC-{start:%Y%m%d-%H%M}", "priority": priority(score), "score": score,
             "title": title, "start": start, "end": stop, "stages": stages, "confidence": conf, "confidence_reasons": why,
             "hosts": [{"host": h, "role": known[h.lower()].get("role"), "criticality": known[h.lower()].get("criticality")} for h in hosts],
@@ -120,6 +148,61 @@ def correlate(alerts: list[dict], assets: dict, health: list[dict], end: datetim
         })
     incidents.sort(key=lambda x: -x["score"])
     return incidents, singles
+
+
+LATERAL_TYPES = {"network", "auth", "file"}
+
+
+def _attacker_path(members: list[dict], known: dict) -> list[dict]:
+    """Machine-to-machine hops seen in the evidence, in time order: from -> to, account, ports, how it was seen."""
+    hops: dict[tuple[str, str], dict] = {}
+    for a in members:
+        for e in a["evidence"]:
+            if e.get("type") not in LATERAL_TYPES:
+                continue
+            frm = e.get("src_host")
+            to = e.get("dst_host") or (None if e.get("sensor") or e.get("perimeter") or e.get("direction") == "outbound"
+                                       else e.get("host"))
+            if not frm or not to or frm == to or frm.lower() not in known or str(to).lower() not in known:
+                continue
+            h = hops.setdefault((frm, to), {"from": frm, "to": to, "first": e["time"], "accounts": set(), "ports": set(),
+                                            "seen_by": set()})
+            h["first"] = min(h["first"], e["time"])
+            if e.get("user") and e.get("type") == "auth":
+                h["accounts"].add(e["user"])
+            if e.get("dst_port"):
+                h["ports"].add(e["dst_port"])
+            h["seen_by"].add(a.get("short") or a["rule"])
+    return [{**h, "accounts": sorted(h["accounts"]), "ports": sorted(h["ports"]), "seen_by": sorted(h["seen_by"])}
+            for h in sorted(hops.values(), key=lambda h: h["first"])]
+
+
+def _escalation(members: list[dict]) -> list[dict]:
+    """Every step where the attacker gained or used higher rights."""
+    rules = {"LAT-002", "CRED-001", "CRED-002", "CRED-003"}
+    return [{"time": a["time"], "rule": a["rule"], "what": a.get("short") or a["title"], "detail": a["text"]}
+            for a in members if a.get("stage") == "privilege escalation" or a["rule"] in rules]
+
+
+def _story(members, path, escalation, compromised) -> str:
+    """The incident in plain words, built only from what the rules found (the AI may rephrase it, never extend it)."""
+    first = members[0]
+    parts = [f"It started at {first['time']:%H:%M} UTC with: {first['text'].rstrip('.')}."]
+    outside = sorted({ip for a in members for ip in a["unknown_ips"]})
+    if outside:
+        parts.append(f"Unknown address(es) involved: {', '.join(outside[:5])}.")
+    if compromised:
+        parts.append(f"Account(s) treated as compromised and followed for {int(FOLLOW_WINDOW.total_seconds() // 3600)} h: "
+                     f"{', '.join(compromised)}.")
+    if path:
+        chain = [path[0]["from"]] + [h["to"] for h in path]
+        parts.append("The activity moved " + " -> ".join(dict.fromkeys(chain)) + ".")
+    if escalation:
+        parts.append("Rights gained or stolen: " + "; ".join(f"{e['time']:%H:%M} {e['what']}" for e in escalation[:5]) + ".")
+    impact = [a for a in members if a.get("stage") == "impact"]
+    if impact:
+        parts.append("Impact: " + "; ".join(dict.fromkeys(a.get("short") or a["title"] for a in impact)) + ".")
+    return " ".join(parts)
 
 
 def _reasons(links):
