@@ -35,6 +35,10 @@ def link_reason(a: dict, b: dict) -> str | None:
     return None
 
 
+def priority(score: int) -> str:
+    return "P1" if score >= 70 else "P2" if score >= 35 else "P3"
+
+
 def _title(members: list[dict], stages: list[str], impact: list[str]) -> str:
     """Short story of the incident from what the alerts actually saw, in stage order (e.g. 'Password guessing → ...')."""
     parts = []
@@ -89,7 +93,7 @@ def correlate(alerts: list[dict], assets: dict, health: list[dict], end: datetim
         title = _title(members, stages, impact)
         my_links = [l for l in links if l["from"] in ids]
         incidents.append({
-            "id": f"INC-{start:%Y%m%d-%H%M}", "priority": "P1" if score >= 70 else "P2" if score >= 35 else "P3", "score": score,
+            "id": f"INC-{start:%Y%m%d-%H%M}", "priority": priority(score), "score": score,
             "title": title, "start": start, "end": stop, "stages": stages, "confidence": conf, "confidence_reasons": why,
             "hosts": [{"host": h, "role": known[h.lower()].get("role"), "criticality": known[h.lower()].get("criticality")} for h in hosts],
             "users": sorted({u for a in members for u in a["users"]}),
