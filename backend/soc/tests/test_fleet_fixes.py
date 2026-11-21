@@ -173,3 +173,9 @@ def test_unknown_parser_name_is_reported_not_a_crash(tmp_path):
     (tmp_path / "x.log").write_text("hello\n", encoding="utf-8")
     events, stats = read_all([{"name": "x", "parser": "no_such_parser", "path": "x.log"}], tmp_path)
     assert events == [] and stats[0]["errors"] == 1 and "no_such_parser" in stats[0]["note"]
+
+
+def test_criticality_scale_is_1_to_5_for_numbers_and_words():
+    from soc.correlate import _criticality_rank
+    assert [_criticality_rank(v) for v in (5, 4, 1, 9, 0, "5")] == [5, 4, 1, 5, 1, 5]
+    assert [_criticality_rank(v) for v in ("critical", "high", "medium", "low", "unknown")] == [5, 4, 2, 1, 1]

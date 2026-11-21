@@ -133,3 +133,11 @@ def test_ollama_rejects_non_default_ports():
 def test_ollama_rejects_public_hosts_without_sending_data():
     with pytest.raises(OllamaError, match="private LAN"):
         query_ollama("http://203.0.113.50:11434", {}, timeout=1)
+
+
+def test_answer_format_only_allows_the_incidents_own_evidence_ids():
+    payload = build_payload("qwen3:4b", build_messages({"events": []}), ["E2", "E1"])
+    items = payload["format"]["properties"]["evidence"]["items"]
+    assert items["enum"] == ["E1", "E2"]
+    assert "enum" not in RESULT_SCHEMA["properties"]["evidence"]["items"]   # the shared schema is not changed
+    assert payload["options"]["num_ctx"] >= 8192

@@ -14,13 +14,17 @@ from .health import silent_between
 
 LINK_WINDOW = timedelta(minutes=60)
 WEAK = 5   # alerts below this severity link only through a shared account or unknown address, never "same host" alone
-CRITICALITY_LEVELS = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+# assets.yaml uses 1-5 (5 = gate control, domain controllers); backend/data/assets.json uses words. One scale: 1-5.
+CRITICALITY_LEVELS = {"low": 1, "medium": 2, "high": 4, "critical": 5}
 
 
 def _criticality_rank(value) -> int:
     if isinstance(value, (int, float)):
-        return min(4, max(1, int(value)))
-    return CRITICALITY_LEVELS.get(str(value).lower(), 1)
+        return min(5, max(1, int(value)))
+    text = str(value).strip().lower()
+    if text.isdigit():
+        return min(5, max(1, int(text)))
+    return CRITICALITY_LEVELS.get(text, 1)
 
 
 def link_reason(a: dict, b: dict) -> str | None:

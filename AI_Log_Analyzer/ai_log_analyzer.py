@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import ipaddress
 import json
 import logging
@@ -260,15 +261,22 @@ def build_dashboard_incident(
     }, evidence_refs
 
 
-def build_payload(model: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+def build_payload(model: str, messages: list[dict[str, str]], evidence_ids: list[str] | None = None) -> dict[str, Any]:
+    """Ollama request. With evidence_ids, the answer format only allows those IDs (E1, E2, ...) in "evidence",
+    so the model cannot write sentences there instead of citing the incident's events."""
+    schema = RESULT_SCHEMA
+    if evidence_ids:
+        schema = copy.deepcopy(RESULT_SCHEMA)
+        schema["properties"]["evidence"]["items"] = {"type": "string", "enum": sorted(evidence_ids)}
     return {
         "model": model,
         "messages": messages,
         "stream": False,
         "think": False,  # disable Qwen3 reasoning output
-        "format": RESULT_SCHEMA,  # structured outputs
+        "format": schema,  # structured outputs
         "keep_alive": "5m",
-        "options": {"temperature": 0, "num_ctx": 4096, "num_predict": 768},
+        # num_ctx: a real incident prompt is ~3-4k tokens; with 4096 Ollama silently cut its start (the instructions)
+        "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 768},
     }
 
 
@@ -396,7 +404,7 @@ def analyze_incident(
     last_error = "unknown error"
 
     for attempt in range(retries + 1):
-        raw = query_ollama(base_url, build_payload(model, messages), timeout)
+        raw = query_ollama(base_url, build_payload(model, messages, sorted(valid_ids)), timeout)
         try:
             return validate_response(raw, valid_ids)
         except ValueError as exc:
@@ -447,7 +455,7 @@ def main() -> int:
 
     if args.dry_run:
         for inc in incidents:
-            payload = build_payload(args.model, build_messages(inc))
+            payload = build_payload(args.model, build_messages(inc), [str(ev["id"]) for ev in inc.get("events", [])])
             print(json.dumps({"url": args.url.rstrip("/") + "/api/chat", "payload": payload}, indent=2))
         return 0
 
