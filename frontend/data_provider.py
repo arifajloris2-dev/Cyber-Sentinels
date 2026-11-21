@@ -9,12 +9,7 @@ import re
 from typing import Protocol
 
 from backend.soc.pipeline import run
-from backend.osint_agent import (
-    DEFAULT_ASSETS,
-    DEFAULT_KEV_NVD_EPSS,
-    DEFAULT_OSINT_POSTS,
-    run_osint_agent,
-)
+from backend.osint_agent import run_osint_agent
 
 from .models import DashboardSnapshot
 
@@ -65,9 +60,9 @@ class IntegratedAgentProvider(SocPipelineProvider):
 
     def load(self) -> DashboardSnapshot:
         soc_snapshot = super().load()
-        assets = self._load_list("assets.json", DEFAULT_ASSETS)
-        vuln_intel = self._load_list("cached_kev_nvd.json", DEFAULT_KEV_NVD_EPSS)
-        osint_posts = self._load_list("osint_posts.json", DEFAULT_OSINT_POSTS)
+        assets = self._load_list("assets.json", [])
+        vuln_intel = self._load_list("cached_kev_nvd.json", [])
+        osint_posts = self._load_list("osint_posts.json", [])
         osint_result = run_osint_agent(assets, vuln_intel, osint_posts)
 
         return DashboardSnapshot(
