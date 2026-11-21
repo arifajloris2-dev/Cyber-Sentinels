@@ -1,3 +1,22 @@
-{
-  "note": "Member 1: Te dhenat e ruajtura CISA KEV, NVD & EPSS"
-}
+[
+  {
+    "cve": "CVE-2025-4120",
+    "product": "GateControlService",
+    "affected_versions": ["2.4.0"],
+    "cisa_kev": true,
+    "epss_score": 0.91,
+    "cvss": 8.8,
+    "mitre_techniques": ["T1543", "T1562"],
+    "summary": "Unauthorized service/configuration modification on gate-control management daemon."
+  },
+  {
+    "cve": "CVE-2024-6387",
+    "product": "OpenSSH",
+    "affected_versions": ["8.9p1"],
+    "cisa_kev": false,
+    "epss_score": 0.64,
+    "cvss": 8.1,
+    "mitre_techniques": ["T1110", "T1021"],
+    "summary": "Remote authentication/session exposure risk."
+  }
+]
