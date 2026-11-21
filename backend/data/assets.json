@@ -1,3 +1,34 @@
-{
-  "note": "Member 1: Inventari i aseteve te bazes ~30 hoste/servere"
-}
+[
+  {
+    "asset_id": "ws-base-014",
+    "ip": "10.24.3.14",
+    "role": "workstation",
+    "accounts": ["svc_ops_night", "op_night_01"],
+    "software": [{"name": "OpenSSH", "version": "8.9p1"}],
+    "criticality": "high"
+  },
+  {
+    "asset_id": "srv-gate-ctrl-01",
+    "ip": "10.24.8.19",
+    "role": "gate-control server",
+    "accounts": ["svc_gate_daemon", "svc_ops_night"],
+    "software": [{"name": "GateControlService", "version": "2.4.0"}],
+    "criticality": "critical"
+  },
+  {
+    "asset_id": "srv-auth-01",
+    "ip": "10.24.1.10",
+    "role": "auth-server",
+    "accounts": ["svc_ops_night", "admin_base"],
+    "software": [{"name": "Kerberos-Auth", "version": "5.2"}],
+    "criticality": "critical"
+  },
+  {
+    "asset_id": "srv-backup-02",
+    "ip": "10.24.2.20",
+    "role": "backup-server",
+    "accounts": ["bkp_svc"],
+    "software": [{"name": "BackupAgent", "version": "4.1.2"}],
+    "criticality": "medium"
+  }
+]
