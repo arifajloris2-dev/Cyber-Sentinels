@@ -62,7 +62,9 @@ def test_every_hunt_request_gets_an_answer(tmp_path):
 
 def test_no_osint_file_means_no_intel(tmp_path, monkeypatch):
     monkeypatch.setattr(intel, "DATA_DIR", tmp_path / "none")
-    assert intel.load(tmp_path) == {"source": None, "findings": [], "hunts": []}
+    monkeypatch.setattr("soc.knowledge.STORE", tmp_path / "no-kb")
+    res = intel.load(tmp_path)
+    assert (res["source"], res["findings"], res["hunts"], res["imported"]) == (None, [], [], 0)
 
 
 def test_pipeline_uses_osint_file_in_the_log_folder_and_never_creates_incidents_from_intel(tmp_path):

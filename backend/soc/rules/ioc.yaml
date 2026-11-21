@@ -1,0 +1,12 @@
+# Indicators the operator imported as text (soc/knowledge.py): known-bad IPs, domains and file hashes.
+rules:
+  - id: IOC-001
+    type: match
+    short: known-bad indicator seen
+    title: Activity involving an indicator from the operator's knowledge import (IP, domain or file hash)
+    attack: [T1071.001]
+    severity: 7
+    group_by: [host, ioc]
+    window_min: 60
+    where: {ioc|exists: true}
+    text: "{host}: {count} event(s) involving imported indicator {ioc} between {first} and {last}"

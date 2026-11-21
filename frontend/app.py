@@ -26,6 +26,7 @@ from AI_Log_Analyzer.ai_log_analyzer import (
     build_dashboard_incident,
     check_ollama_model,
 )
+from backend.soc import knowledge as kb_store
 from frontend import search as event_search
 from frontend.data_provider import CsvSimulationProvider, DashboardProvider, IntegratedAgentProvider
 from frontend.explanations import instant_overview, plain_alert_explanation
@@ -67,6 +68,30 @@ EXAMPLE_QUERIES = [
     ("Big uploads", "bytes_out>=10000000"),
     ("PsExec", "PSEXESVC"),
     ("LSASS access", "action=process-access target=*lsass*"),
+]
+KB_EXAMPLE = """# Example: a new vulnerability, an indicator and a leaked account (plain text only)
+CVE: CVE-2026-31337
+Product: GateControlService
+Versions: 2.4.0
+KEV: yes
+EPSS: 0.88
+Techniques: T1543, T1562
+Summary: Unauthenticated configuration write in the gate management daemon.
+Reference: https://example.invalid/advisory/31337
+
+IP: 203.0.113.99
+Note: data-theft server reported by an allied CERT
+
+Account: svc_sql
+Note: password offered for sale on a forum
+"""
+KB_HELP = [
+    "CVE blocks become vulnerability exposures: matched to the asset inventory (product + version) or the hosts you name, "
+    "attached to incidents that show their ATT&CK techniques, and given to the local AI whenever it explains an incident.",
+    "IP, Domain and Hash blocks become indicators: rule IOC-001 flags every log line that contains them.",
+    "Account blocks mark leaked accounts: attached to incidents that use them.",
+    "Keys: CVE, Product, Versions, KEV, EPSS, CVSS, Techniques, Hosts, Summary, Reference, IP, Domain, Hash, Account, "
+    "Note, Source. Separate blocks with an empty line; # starts a comment. Anything else is rejected.",
 ]
 log = logging.getLogger(__name__)
 
@@ -229,6 +254,7 @@ class DashboardPage:
                 self.tab_agents = ui.tab("agents", "Agents", icon="smart_toy")
                 self.tab_sources = ui.tab("sources", "Sources & intel", icon="sensors")
                 self.tab_alerts = ui.tab("alerts", "Alerts", icon="notifications_active")
+                self.tab_knowledge = ui.tab("knowledge", "Knowledge import", icon="school")
             ui.label("Advice only: nothing is blocked or changed automatically.").classes(
                 "text-xs px-4 pt-6").style("color:#8aa0b7")
         with ui.column().classes("w-full p-4 gap-4").style("max-width:1600px;margin:0 auto"):
@@ -248,6 +274,8 @@ class DashboardPage:
                     self._build_sources()
                 with ui.tab_panel("alerts").classes("p-0"):
                     self._build_alerts()
+                with ui.tab_panel("knowledge").classes("p-0"):
+                    self._build_knowledge()
         self._build_dialogs()
 
     def _build_header(self) -> None:
@@ -481,6 +509,135 @@ class DashboardPage:
             self.alert_table.on("close_alert", lambda e: self._close_alert(e.args))
             self.alert_table.on("reopen_alert", lambda e: self._reopen_alert(e.args))
 
+    # ---------------------------------------------------------------- knowledge import (text only)
+    def _build_knowledge(self) -> None:
+        self.kb_check: Any = None
+        with ui.element("div").classes("soc-grid-2 w-full"):
+            with ui.column().classes("w-full gap-4"):
+                with self._card("IMPORT NEW KNOWLEDGE  ·  plain text only"):
+                    ui.label("The base is offline, so new vulnerabilities and indicators are fed in by hand. Only a .txt file or "
+                             "pasted text is accepted; it is checked line by line, nothing is executed or opened, and a clean "
+                             "copy is stored apart from the logs.").classes("text-xs mt-1").style(f"color:{COLORS['muted']}")
+                    self.kb_upload = ui.upload(label="Import a .txt file", auto_upload=True, max_files=1,
+                                               max_file_size=kb_store.MAX_BYTES, on_upload=self._kb_uploaded,
+                                               on_rejected=lambda: ui.notify("Refused: only one .txt file up to 256 KB",
+                                                                             type="negative")
+                                               ).props('accept=".txt,text/plain" flat bordered color=primary').classes("w-full mt-2")
+                    self.kb_text = ui.textarea("...or paste the text here").props("outlined autogrow").classes("w-full soc-mono mt-2")
+                    with ui.row().classes("w-full items-center gap-2 mt-1"):
+                        ui.button("Check", icon="rule",
+                                  on_click=lambda: self._kb_check_text(self.kb_text.value or "", "pasted text")).props(
+                            "unelevated no-caps").style(f"background:{COLORS['blue']};color:white")
+                        ui.button("Insert example", icon="lightbulb", on_click=lambda: self.kb_text.set_value(KB_EXAMPLE)).props(
+                            "flat no-caps")
+                        self.kb_label = ui.input("Label (who/what)", value="operator import").props("outlined dense").classes("grow")
+                with self._card("CHECK RESULT"):
+                    self.kb_preview = ui.column().classes("w-full gap-1 mt-1")
+                    self.kb_import_button = ui.button("Import into the knowledge base", icon="download_done",
+                                                      on_click=self._kb_import).props("unelevated no-caps").style(
+                        f"background:{COLORS['green']};color:white")
+                    self.kb_import_button.disable()
+            with ui.column().classes("w-full gap-4"):
+                with self._card("WHAT THE IMPORT DOES"):
+                    for line in KB_HELP:
+                        ui.label(f"- {line}").classes("text-sm")
+                with self._card("KNOWLEDGE BASE"):
+                    self.kb_imports = ui.column().classes("w-full gap-2 mt-2")
+                    self.kb_table = ui.table(
+                        columns=[{"name": "kind", "label": "TYPE", "field": "kind", "align": "left", "sortable": True},
+                                 {"name": "key", "label": "ITEM", "field": "key", "align": "left", "sortable": True},
+                                 {"name": "info", "label": "DETAILS", "field": "info", "align": "left"},
+                                 {"name": "file", "label": "IMPORT", "field": "file", "align": "left"}],
+                        rows=[], row_key="rid", pagination={"rowsPerPage": 10}).classes("w-full soc-table mt-2").props(
+                        "flat bordered dense wrap-cells")
+
+    async def _kb_uploaded(self, e: Any) -> None:
+        f = e.file
+        name = str(getattr(f, "name", "") or "")
+        if not name.lower().endswith(".txt"):
+            ui.notify(f"Refused '{name}': only .txt files are accepted", type="negative")
+            self.kb_upload.reset()
+            return
+        data = await f.read()
+        self.kb_upload.reset()
+        self._kb_check_text(data, name)
+
+    def _kb_check_text(self, data: str | bytes, origin: str) -> None:
+        res = kb_store.check(data)
+        self.kb_check = res if not res.error and res.records else None
+        self.kb_preview.clear()
+        with self.kb_preview:
+            ui.label(f"Source: {origin} - SHA-256 {res.sha256[:16]}...").classes("text-xs soc-mono").style(f"color:{COLORS['muted']}")
+            if res.error:
+                ui.label(f"Refused: {res.error}").classes("text-sm font-bold").style(f"color:{COLORS['red']}")
+            else:
+                ui.label(f"{len(res.records)} record(s) accepted, {len(res.rejected)} line(s) rejected").classes(
+                    "text-sm font-bold").style(f"color:{COLORS['green'] if res.records else COLORS['amber']}")
+                for r in res.records:
+                    ui.label(f"OK  {self._kb_describe(r)}").classes("text-sm")
+                for n, line, why in res.rejected:
+                    ui.label(f"REJECTED line {n}: {why}" + (f"  ({line})" if line else "")).classes("text-xs soc-mono").style(
+                        f"color:{COLORS['amber']}")
+        if self.kb_check:
+            self.kb_import_button.enable()
+        else:
+            self.kb_import_button.disable()
+
+    @staticmethod
+    def _kb_describe(r: dict) -> str:
+        if r["kind"] == "cve":
+            extra = ", ".join(x for x in [r.get("product", ""), "/".join(r.get("versions", [])),
+                                          "KEV" if r.get("kev") else "", " ".join(r.get("techniques", []))] if x)
+            return f"CVE {r['cve']}" + (f" ({extra})" if extra else "") + (f": {r['summary']}" if r.get("summary") else "")
+        if r["kind"] == "ioc":
+            what = "IP" if r.get("ip") else "Domain" if r.get("domain") else "Hash"
+            value = r.get("ip") or r.get("domain") or r.get("hash")
+            return f"Indicator {what} {value}" + (f": {r['note']}" if r.get("note") else "")
+        return f"Leaked account {r['account']}" + (f": {r['note']}" if r.get("note") else "")
+
+    async def _kb_import(self) -> None:
+        if not self.kb_check:
+            return
+        try:
+            path = kb_store.save(self.kb_check, self.kb_label.value or "operator import")
+        except (ValueError, OSError) as exc:
+            ui.notify(f"Import failed: {exc}", type="negative")
+            return
+        ui.notify(f"Imported {len(self.kb_check.records)} record(s) as {path.name}; re-analysing the logs...", type="positive")
+        self.kb_check = None
+        self.kb_import_button.disable()
+        self.kb_text.set_value("")
+        self.kb_preview.clear()
+        self.qwen_results.clear()          # explanations are regenerated with the new knowledge
+        await self.refresh()
+
+    def _kb_remove(self, name: str) -> None:
+        if kb_store.remove(name):
+            ui.notify(f"Withdrew {name} (kept as .removed for the audit trail); press Refresh to re-analyse", type="info")
+        self._render_knowledge()
+
+    def _render_knowledge(self) -> None:
+        if not hasattr(self, "kb_imports"):
+            return
+        files = kb_store.imports()
+        self.kb_imports.clear()
+        with self.kb_imports:
+            if not files:
+                ui.label("Nothing imported yet.").classes("text-sm").style(f"color:{COLORS['muted']}")
+            for m in files:
+                with ui.row().classes("w-full items-center justify-between no-wrap"):
+                    when = m.get("imported", "")[:16].replace("T", " ")
+                    ui.label(f"{when} - {m.get('label', '')} - {m.get('records', '?')} record(s)").classes("text-sm")
+                    ui.button(icon="delete", on_click=lambda _, n=m["file"]: self._kb_remove(n)).props(
+                        "flat dense round").tooltip(f"Remove {m['file']}")
+        rows = []
+        for n, r in enumerate(kb_store.load()):
+            key = r.get("cve") or r.get("ip") or r.get("domain") or r.get("hash") or r.get("account")
+            rows.append({"rid": n, "kind": {"cve": "CVE", "ioc": "indicator", "account": "leaked account"}[r["kind"]],
+                         "key": key, "info": _short(self._kb_describe(r), 160), "file": r.get("imported_from", "")[:20]})
+        self.kb_table.rows = rows
+        self.kb_table.update()
+
     # ---------------------------------------------------------------- dialogs
     def _build_dialogs(self) -> None:
         with ui.dialog() as self.settings_dialog, ui.card().style("width:min(640px,95vw)"):
@@ -596,6 +753,7 @@ class DashboardPage:
         self._render_member_one(snapshot)
         self._render_alerts()
         self._render_entity_options()
+        self._render_knowledge()
         if not self.search_results:
             self.run_search()
 
@@ -1359,7 +1517,11 @@ class DashboardPage:
 
     @staticmethod
     def _analyze_incident(incident: Record, snapshot: DashboardSnapshot, base_url: str, model: str) -> tuple[Record, dict[str, str]]:
-        payload, evidence_refs = build_dashboard_incident(incident, snapshot.threat_findings, snapshot.sources, snapshot.advisories)
+        iid = str(incident.get("id"))
+        # the AI sees the knowledge that matters for THIS incident first, then the operator's newest imports
+        findings = sorted(snapshot.threat_findings, key=lambda f: (iid not in (f.get("matched_incidents") or []),
+                                                                   not str(f.get("id", "")).startswith("KB-")))
+        payload, evidence_refs = build_dashboard_incident(incident, findings, snapshot.sources, snapshot.advisories)
         result = analyze_incident(payload, base_url=base_url, model=model, timeout=240, retries=1)
         return result, evidence_refs
 

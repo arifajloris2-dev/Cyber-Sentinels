@@ -36,7 +36,7 @@ def _internal(ip: str, nets: list) -> bool | None:
 
 
 # ======================================================================= context
-def enrich(events: list[dict], assets: dict) -> None:
+def enrich(events: list[dict], assets: dict, iocs: dict | None = None) -> None:
     """Add context fields the rules use. Never changes the original fields.
 
     assets.yaml may also list  internal_nets: [cidr, ...]  (default: the private ranges) and
@@ -51,7 +51,16 @@ def enrich(events: list[dict], assets: dict) -> None:
     users = {str(u["user"]).lower(): u for u in assets.get("users", []) if u.get("user")}
     privileged_groups = {str(g).lower() for g in assets.get("privileged_groups", DEFAULT_PRIVILEGED_GROUPS)}
     zones = Zones(assets)
+    iocs = iocs or {}
+    ioc_ips, ioc_text = set(iocs.get("ip", ())), sorted(set(iocs.get("domain", ())) | set(iocs.get("hash", ())))
     for e in events:
+        if ioc_ips or ioc_text:                 # operator-imported indicators (soc/knowledge.py)
+            hit = next((ip for ip in (e.get("src_ip"), e.get("dst_ip")) if ip in ioc_ips), None)
+            if hit is None and ioc_text:
+                raw = str(e.get("raw", "")).lower()
+                hit = next((x for x in ioc_text if x in raw), None)
+            if hit:
+                e["ioc"] = hit
         h = e["time"].hour
         e["night"] = h >= night_from or h < night_to
         u = users.get(str(e.get("user", "")).lower())

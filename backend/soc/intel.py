@@ -26,7 +26,21 @@ MAX_BONUS = 20
 
 
 def load(folder: Path | None = None) -> dict:
-    """Read the OSINT output. Returns {"source", "findings", "hunts"} (empty lists when there is none)."""
+    """OSINT output + operator-imported knowledge (soc/knowledge.py). Returns {"source", "findings", "hunts"}."""
+    res = _load_osint(folder)
+    from . import knowledge                        # imported CVEs / leaked accounts, same finding format
+    try:
+        inventory = json.loads((DATA_DIR / "assets.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        inventory = []
+    kb = knowledge.as_findings(knowledge.load(), inventory if isinstance(inventory, list) else [])
+    start = len(res["findings"])
+    res["findings"] = res["findings"] + [_finding(f, start + i) for i, f in enumerate(kb, 1)]
+    res["imported"] = len(kb)
+    return res
+
+
+def _load_osint(folder: Path | None = None) -> dict:
     for p in ([Path(folder) / FILE] if folder else []) + [DATA_DIR / FILE]:
         if p.exists():
             try:

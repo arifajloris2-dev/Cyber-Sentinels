@@ -1,0 +1,2 @@
+# operator-imported knowledge stays on this machine (see backend/soc/knowledge.py)
+*.txt

@@ -69,6 +69,28 @@ raised, the incidents those fed, silent sources, and plain-language highlights.
 (the parse function can live in the same file) and, if needed, a rules file in `soc/rules/`. Nothing else changes.
 Agents only observe and report; none of them blocks or changes anything.
 
+## Feeding new knowledge (plain text only)
+
+The base is offline, so new vulnerabilities and indicators are imported by the operator in the dashboard
+(**Knowledge import** view): upload a `.txt` file or paste text, press **Check**, review what is accepted and
+rejected, then **Import**. Format: `Key: value` lines, blocks separated by an empty line:
+
+```
+CVE: CVE-2026-31337        Product: GateControlService   Versions: 2.4.0   KEV: yes   EPSS: 0.88
+Techniques: T1543, T1562   Hosts: srv-gate-ctrl-01        Summary: ...      Reference: https://...
+IP: 203.0.113.99 | Domain: bad.example | Hash: <hex> | Account: svc_sql    (+ Note:, Source:)
+```
+
+- **CVE** → a vulnerability finding (matched to `backend/data/assets.json` software or the named hosts), attached
+  to incidents that show its techniques, and given to the local AI as knowledge when it explains an incident.
+- **IP / Domain / Hash** → rule **IOC-001** flags every log line containing it. **Account** → attached to incidents
+  using it.
+- **Safety:** only UTF-8 text (no binary, no control characters, size limits); only the listed keys; every value
+  checked against a strict pattern; nothing executed, opened or fetched; the stored copy in `backend/data/knowledge/`
+  is rebuilt from the checked fields with the submitted SHA-256, re-checked on every load, and kept out of git.
+  Withdrawing an import renames it to `.removed` (audit trail); log files are never touched.
+  The local model is not retrained: it gets the knowledge as context each time it explains.
+
 ## Logs it reads
 
 | Machine | Log | Parser | Collect with |
@@ -126,6 +148,7 @@ See `soc/collect/README.md` for the one-time setup on each machine.
 | MGMT-002 | Service degraded after an unscheduled privileged change | T1489 |
 | SVC-001 | Traffic, latency and server errors rising together while checks still pass (DDoS early warning) | T1498, T1499.002 |
 | SVC-002 | Availability check failed | T1499.002 |
+| IOC-001 | Activity involving an imported indicator (IP, domain or file hash) | T1071.001 |
 | SYS-001 | New service installed (Windows) | T1543.003 |
 | SYS-002 | Service started that never ran before (Ubuntu) | T1543.002 |
 | SYS-003 | Firewall rule or setting changed | T1562.004 |

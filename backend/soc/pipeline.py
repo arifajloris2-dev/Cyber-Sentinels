@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from . import agents, health, intel, noise
+from . import agents, health, intel, knowledge, noise
 from .correlate import correlate, priority
 from .detect import enrich, load_rules, run_rules
 from .parsers import read_all
@@ -39,7 +39,7 @@ def load(folder: Path):
     """Read and parse every log once (re-used by replay)."""
     cfg = settings(folder)
     events, stats = read_all(cfg["sources"], Path(folder))
-    enrich(events, cfg["assets"])
+    enrich(events, cfg["assets"], knowledge.indicators(knowledge.load()))
     return cfg, events, stats
 
 
