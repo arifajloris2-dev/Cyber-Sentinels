@@ -1,0 +1,17 @@
+# The VM's own setup, documented as approved work (like patching). Anything else in these windows still alerts.
+tickets:
+  - id: LAB-VM-OS-INSTALL
+    title: "Install Windows on the lab VM: built-in services and setup accounts"
+    hosts: [WIN-0RKVQU2JH17, DESKTOP-U3ALSIH, MINWINPC]
+    start: "2026-11-20T22:40:00+00:00"
+    end: "2026-11-20T23:00:00+00:00"
+    allow:
+      - {action: service-installed}
+      - {action: account-created, detail|contains: [WDAGUtilityAccount, defaultuser0, lab-user]}
+  - id: LAB-VM-TOOLS
+    title: "Install VMware Tools on the lab VM"
+    hosts: [DESKTOP-U3ALSIH]
+    start: "2026-11-21T09:00:00+00:00"
+    end: "2026-11-21T09:10:00+00:00"
+    allow:
+      - {action: service-installed, path|contains: [VMware, vm3d, vmci.sys, vsock.sys, vmmouse.sys, vmusbmouse.sys, vmmemctl.sys, vmhgfs.sys, vmrawdsk.sys, dllhost.exe]}

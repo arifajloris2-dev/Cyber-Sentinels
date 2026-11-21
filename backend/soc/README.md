@@ -59,6 +59,7 @@ incidents = analyse("soc/sample_logs")["incidents"]   # JSON-ready: for llm_advi
 | Windows | Sysmon: process created (1), network connection (3), file created (11), JSON lines | `windows_sysmon` | export like the Security log |
 | Network sensor | Zeek `conn.log` (JSON or default TSV) | `zeek_conn` | Zeek on a SPAN/mirror port |
 | Mail gateway | Verdict log, JSON lines (`ts, direction, client_ip, from, to[], subject, attachments[], verdict, action`) | `mail_gateway` | gateway export |
+| Mail events | JSON lines (`timestamp, event: email_delivered/url_clicked, user, message_id, verdict, url`) | `mail_events` | lab demo |
 
 See `soc/collect/README.md` for the one-time setup on each machine.
 
@@ -81,6 +82,7 @@ See `soc/collect/README.md` for the one-time setup on each machine.
 | PROC-003 | Scheduled task created by a user account (Windows 4698) | T1053.005 |
 | PROC-004 | Program file written into a user profile (Sysmon) | T1105 |
 | MAIL-001 | Mail with a risky attachment (.docm, .js, .iso, …) delivered to a user | T1566.001 |
+| MAIL-002 | User clicked a link in a mail flagged as phishing | T1566.002, T1204.001 |
 | SYS-001 | New service installed (Windows) | T1543.003 |
 | SYS-002 | Service started that never ran before (Ubuntu) | T1543.002 |
 | SYS-003 | Firewall rule or setting changed | T1562.004 |
@@ -104,7 +106,8 @@ window), `sequence` (steps in order, same values), `new_value` (never seen in th
 | `osint_output.json` (optional) | Threat intel from `backend/osint_agent.py`. If the log folder has none, `backend/data/osint_output.json` is used |
 
 Start from the files in `soc/sample_logs/` (2 machines). For a full base (50 devices, 2 days, 4 attacks, maintenance, a
-silent log source, answer key) run `python backend/soc/fleet/make_fleet.py`: see [`fleet/README.md`](fleet/README.md). Later the machine list can come from `backend/data/assets.json` (Member 1).
+silent log source, answer key) run `python backend/soc/fleet/make_fleet.py`: see [`fleet/README.md`](fleet/README.md). Real logs from the team's lab VMs
+(anonymised) are in [`lab_logs/`](lab_logs/README.md). Later the machine list can come from `backend/data/assets.json` (Member 1).
 
 ## Output for the rest of the project
 

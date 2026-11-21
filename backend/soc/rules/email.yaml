@@ -12,3 +12,16 @@ rules:
       direction: inbound
       attachments|re: ["(?i)\\.(docm|xlsm|pptm|dotm|js|jse|vbs|vbe|hta|exe|scr|lnk|iso|img|one|wsf|bat|cmd|ps1)\\b"]
     text: "Mail from {sender} ({src_ip}) with attachment {attachments} delivered to {recipient} at {first}, gateway score {score}"
+
+  - id: MAIL-002
+    type: sequence
+    short: Link clicked in a phishing mail
+    title: User clicked a link in a mail flagged as phishing
+    attack: [T1566.002, T1204.001]
+    severity: 8
+    by: [user, message_id]
+    within_min: 60
+    steps:
+      - where: {type: email, action: delivered, verdict: [suspected_phishing, phishing, malicious, malware, suspicious]}
+      - where: {type: email, action: url-clicked}
+    text: "{user} clicked {url} at {last} in mail {message_id}, which the gateway flagged as phishing"

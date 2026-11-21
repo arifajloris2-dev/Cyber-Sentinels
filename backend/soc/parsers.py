@@ -61,7 +61,8 @@ def parse_windows_events(path: Path, src: dict, stats: dict):
                                  src_ip=None if ip in ("-", "::1", "127.0.0.1") else ip,
                                  logon=WIN_LOGON.get(str(d.get("LogonType", "")), None),
                                  service=d.get("ServiceName"), path=d.get("ImagePath") or d.get("ServiceFileName") or d.get("ApplicationPath"),
-                                 detail=d.get("RuleName") or d.get("updateTitle") or d.get("TaskName") or d.get("TargetServerName"))
+                                 detail=(f"new account {d.get('TargetUserName')}" if int(r["Id"]) == 4720 else None)
+                                 or d.get("RuleName") or d.get("updateTitle") or d.get("TaskName") or d.get("TargetServerName"))
             except (ValueError, KeyError, TypeError):
                 stats["errors"] += 1
 
@@ -285,9 +286,37 @@ def parse_mail_gateway(path: Path, src: dict, stats: dict):
                 stats["errors"] += 1
 
 
+# ======================================================================= Mail events (lab format: delivery + link clicks)
+def parse_mail_events(path: Path, src: dict, stats: dict):
+    """JSON lines with timestamp, event (email_delivered | url_clicked), user, message_id, verdict, url.
+
+    Delivery -> type email, action delivered (verdict kept); click -> type email, action url-clicked (url in detail).
+    message_id is kept so a click can be tied to the mail it came from.
+    """
+    acts = {"email_delivered": "delivered", "url_clicked": "url-clicked", "email_quarantined": "quarantined"}
+    with open(path, encoding="utf-8-sig", errors="replace") as fh:
+        for n, line in enumerate(fh, 1):
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+                _seen(stats, r["timestamp"])
+                act = acts.get(str(r.get("event", "")).lower())
+                if not act:
+                    stats["skipped"] += 1
+                    continue
+                yield make_event(src["name"], n, line, src["path"], r["timestamp"], os="network", host=src.get("host"),
+                                 type="email", action=act, outcome="success", direction="inbound", user=r.get("user"),
+                                 message_id=r.get("message_id"), verdict=r.get("verdict"), url=r.get("url"),
+                                 detail=r.get("url") or r.get("subject") or r.get("message_id"))
+            except (ValueError, KeyError, TypeError):
+                stats["errors"] += 1
+
+
 PARSERS = {"windows_events": parse_windows_events, "windows_firewall": parse_windows_firewall, "linux_auth": parse_linux_auth,
            "linux_ufw": parse_linux_ufw, "linux_syslog": parse_linux_syslog, "linux_dpkg": parse_linux_dpkg,
-           "windows_sysmon": parse_windows_sysmon, "zeek_conn": parse_zeek_conn, "mail_gateway": parse_mail_gateway}
+           "windows_sysmon": parse_windows_sysmon, "zeek_conn": parse_zeek_conn, "mail_gateway": parse_mail_gateway,
+           "mail_events": parse_mail_events}
 
 
 def read_all(sources: list[dict], folder: Path) -> tuple[list[dict], list[dict]]:
