@@ -10,7 +10,9 @@ mapping, a confidence that drops when a log source was silent, and suggested che
     result["incidents"]    # what llm_advisor.py and the dashboard use (fields below)
 
 Each incident: id, priority (P1-P3), score, title, start, end, stages, confidence, confidence_reasons, hosts, users,
-unknown_ips, attack (ATT&CK techniques), alerts (with evidence), links, why_together, next_checks.
+unknown_ips, attack (ATT&CK techniques), alerts (with evidence), links, why_together, next_checks,
+intel (OSINT findings from Member 1 that match it). Also returned: threat_findings and hunts (each hunt request
+from the OSINT agent with its status: which incident covers it, or that the logs show nothing).
 
 Command line (from backend/):  python correlation.py soc/sample_logs      (also writes <folder>/out/report.md)
 """
@@ -27,6 +29,7 @@ def analyse(log_folder) -> dict:
     r = run(Path(log_folder))
     return report.jsonable({"incidents": r["incidents"], "singles": r["singles"], "suppressed": r["suppressed"],
                             "maintenance": r["maintenance"], "health": r["health"],
+                            "threat_findings": r.get("intel", {}).get("findings", []), "hunts": r.get("intel", {}).get("hunts", []),
                             "summary": {"events": r["events"], "rules": r["rules"], "alerts": len(r["alerts"]),
                                         "incidents": len(r["incidents"]), "seconds": r.get("seconds")}})
 

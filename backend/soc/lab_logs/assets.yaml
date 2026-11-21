@@ -1,0 +1,6 @@
+night_hours: [20, 6]
+assets:
+  - {host: DESKTOP-U3ALSIH, role: lab Windows VM, criticality: 2}
+  - {host: WIN-0RKVQU2JH17, role: lab Windows VM (name during setup), criticality: 2}
+  - {host: MINWINPC, role: lab Windows VM (name during install), criticality: 2}
+  - {host: mail-lab, role: lab mail log (demo), criticality: 2}

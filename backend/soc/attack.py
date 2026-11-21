@@ -6,6 +6,8 @@ TECHNIQUES = {
     "T1078": ("Valid Accounts", "Initial Access"),
     "T1200": ("Hardware Additions", "Initial Access"),
     "T1566.001": ("Phishing: Spearphishing Attachment", "Initial Access"),
+    "T1566.002": ("Phishing: Spearphishing Link", "Initial Access"),
+    "T1204.001": ("User Execution: Malicious Link", "Execution"),
     "T1204.002": ("User Execution: Malicious File", "Execution"),
     "T1059.001": ("Command and Scripting Interpreter: PowerShell", "Execution"),
     "T1021": ("Remote Services", "Lateral Movement"),

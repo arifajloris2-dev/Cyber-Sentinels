@@ -1,0 +1,4 @@
+{"timestamp":"2026-11-21T09:00:00Z","event":"email_delivered","user":"lab-user","message_id":"demo-001","verdict":"suspected_phishing","synthetic":true}
+{"timestamp":"2026-11-21T09:00:30Z","event":"url_clicked","user":"lab-user","message_id":"demo-001","url":"https://example.invalid/demo","synthetic":true}
+{"timestamp":"2026-11-21T09:01:00Z","event":"email_delivered","user":"lab-user","message_id":"demo-002","verdict":"clean","synthetic":true}
+{"timestamp":"2026-11-21T09:01:30Z","event":"url_clicked","user":"lab-user","message_id":"demo-002","url":"https://example.invalid/routine","synthetic":true}

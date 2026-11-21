@@ -1,8 +1,10 @@
 {
   "member": "Member 1 — OSINT & Threat Intelligence",
-  "structured_threat_findings": [
+  "threat_findings": [
     {
-      "type": "vulnerability_exposure",
+      "id": "FIND-CVE-2025-4120",
+      "title": "CVE-2025-4120 (GateControlService) on srv-gate-ctrl-01",
+      "finding_type": "vulnerability_exposure",
       "cve": "CVE-2025-4120",
       "cisa_kev": true,
       "epss_score": 0.91,
@@ -19,7 +21,9 @@
       "summary": "Unauthorized service/configuration modification on gate-control management daemon."
     },
     {
-      "type": "vulnerability_exposure",
+      "id": "FIND-CVE-2024-6387",
+      "title": "CVE-2024-6387 (OpenSSH) on ws-base-014",
+      "finding_type": "vulnerability_exposure",
       "cve": "CVE-2024-6387",
       "cisa_kev": false,
       "epss_score": 0.64,
@@ -34,7 +38,67 @@
       "summary": "Remote authentication/session exposure risk."
     },
     {
-      "type": "credential_exposure",
+      "id": "FIND-osint-001-svc_ops_night",
+      "title": "Leaked Account 'svc_ops_night' (osint-001) across ws-base-014, srv-gate-ctrl-01, srv-auth-01",
+      "finding_type": "credential_exposure_osint",
+      "post_id": "osint-001",
+      "source": "simulated_telegram_leak_channel",
+      "timestamp": "2026-11-21T01:55:00Z",
+      "account": "svc_ops_night",
+      "affected_assets": [
+        "ws-base-014",
+        "srv-gate-ctrl-01",
+        "srv-auth-01"
+      ],
+      "confidence": 0.88,
+      "mitre_techniques": [
+        "T1078",
+        "T1110"
+      ],
+      "summary": "Leaked credentials for svc_ops_night and notes targeting GateControlService v2.4.0."
+    }
+  ],
+  "structured_threat_findings": [
+    {
+      "id": "FIND-CVE-2025-4120",
+      "title": "CVE-2025-4120 (GateControlService) on srv-gate-ctrl-01",
+      "finding_type": "vulnerability_exposure",
+      "cve": "CVE-2025-4120",
+      "cisa_kev": true,
+      "epss_score": 0.91,
+      "affected_assets": [
+        "srv-gate-ctrl-01"
+      ],
+      "mitre_techniques": [
+        "T1543",
+        "T1562"
+      ],
+      "osint_corroboration": [
+        "osint-001"
+      ],
+      "summary": "Unauthorized service/configuration modification on gate-control management daemon."
+    },
+    {
+      "id": "FIND-CVE-2024-6387",
+      "title": "CVE-2024-6387 (OpenSSH) on ws-base-014",
+      "finding_type": "vulnerability_exposure",
+      "cve": "CVE-2024-6387",
+      "cisa_kev": false,
+      "epss_score": 0.64,
+      "affected_assets": [
+        "ws-base-014"
+      ],
+      "mitre_techniques": [
+        "T1110",
+        "T1021"
+      ],
+      "osint_corroboration": [],
+      "summary": "Remote authentication/session exposure risk."
+    },
+    {
+      "id": "FIND-osint-001-svc_ops_night",
+      "title": "Leaked Account 'svc_ops_night' (osint-001) across ws-base-014, srv-gate-ctrl-01, srv-auth-01",
+      "finding_type": "credential_exposure_osint",
       "post_id": "osint-001",
       "source": "simulated_telegram_leak_channel",
       "timestamp": "2026-11-21T01:55:00Z",
@@ -63,7 +127,7 @@
         "T1562"
       ],
       "assigned_to": "Member 2 (SOC Detection & Correlation)",
-      "hunt_query": "Hunt logs for ['srv-gate-ctrl-01'] covering techniques ['T1543', 'T1562'] and unexpected service/configuration activity."
+      "hunt_query": "Check system, firewall and auth logs on ['srv-gate-ctrl-01'] for unexpected config/service changes mapped to ['T1543', 'T1562']."
     },
     {
       "hunt_id": "HUNT-CVE-2024-6387",
@@ -75,7 +139,7 @@
         "T1021"
       ],
       "assigned_to": "Member 2 (SOC Detection & Correlation)",
-      "hunt_query": "Hunt logs for ['ws-base-014'] covering techniques ['T1110', 'T1021'] and unexpected service/configuration activity."
+      "hunt_query": "Check system, firewall and auth logs on ['ws-base-014'] for unexpected config/service changes mapped to ['T1110', 'T1021']."
     },
     {
       "hunt_id": "HUNT-ACCT-svc_ops_night",
@@ -90,7 +154,7 @@
         "T1021"
       ],
       "assigned_to": "Member 2 (SOC Detection & Correlation)",
-      "hunt_query": "Check failed/successful logins and internal connections for account 'svc_ops_night' on ['ws-base-014', 'srv-gate-ctrl-01', 'srv-auth-01']."
+      "hunt_query": "Correlate failed/successful remote logins and unusual outbound internal connections for account 'svc_ops_night' across ['ws-base-014', 'srv-gate-ctrl-01', 'srv-auth-01']."
     }
   ]
 }

@@ -7,6 +7,7 @@ The log folder contains the log files and three settings files:
   sources.yaml      which log file is which (parser, host, time offset, how often it normally writes)
   assets.yaml       known machines: host, ip, role, criticality; admin IPs; night hours
   maintenance.yaml  approved change tickets (patching, backup) and what they are allowed to do
+  osint_output.json optional threat intel (Member 1); if absent, backend/data/osint_output.json is used
 """
 from __future__ import annotations
 
@@ -16,8 +17,8 @@ from pathlib import Path
 
 import yaml
 
-from . import health, noise
-from .correlate import correlate
+from . import health, intel, noise
+from .correlate import correlate, priority
 from .detect import enrich, load_rules, run_rules
 from .parsers import read_all
 
@@ -76,6 +77,9 @@ def run(folder: Path, until: datetime | None = None, loaded=None, rules_dir: Pat
     t0 = time.perf_counter()
     r = detect(folder, until, loaded, rules_dir)
     if not r["events"]:
-        return {**r, "incidents": [], "singles": []}
+        return {**r, "incidents": [], "singles": [], "intel": intel.load(folder)}
     incidents, singles = correlate(r["alerts"], r["cfg"]["assets"], r["health"], r["end"])
-    return {**r, "incidents": incidents, "singles": singles, "seconds": round(time.perf_counter() - t0, 3)}
+    threat = intel.load(folder)                     # OSINT findings + hunt requests (Member 1), if any
+    intel.attach(incidents, threat, priority)
+    incidents.sort(key=lambda x: -x["score"])
+    return {**r, "incidents": incidents, "singles": singles, "intel": threat, "seconds": round(time.perf_counter() - t0, 3)}

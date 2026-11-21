@@ -40,6 +40,8 @@ class SocPipelineProvider:
                 "alerts": result.get("alerts", []),
                 "singles": result.get("singles", []),
                 "maintenance": result.get("maintenance", []),
+                # OSINT findings (Member 1) as matched by the SOC engine: shown in the agent status, passed to the AI
+                "threat_findings": (result.get("intel") or {}).get("findings", []),
             }
         )
 

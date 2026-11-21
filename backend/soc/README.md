@@ -43,7 +43,8 @@ incidents = analyse("soc/sample_logs")["incidents"]   # JSON-ready: for llm_advi
 | 4. Detect | `soc/detect.py` + `soc/rules/*.yaml` | Runs the rules (see below) |
 | 5. Source health | `soc/health.py` | Notices when a log stops writing at a time of day it normally writes (learned from the baseline), so the incident can say it may be missing events. A log that is quiet every night is not silent |
 | 6. Correlate | `soc/correlate.py` | Links alerts with the same account, unknown address or host within 60 min into one incident: entry → execution → lateral movement → command and control → impact. Weak alerts (severity < 5) link only by account or unknown address, so a busy server cannot glue unrelated alerts together. Adds ATT&CK, a score (P1–P3), a confidence with reasons, and suggested checks |
-| 7. Report | `soc/report.py` | `report.md` for people; `incidents.json`, `alerts.json`, `suppressed.json`, `health.json` for other tools |
+| 7. Threat intel | `soc/intel.py` | Joins the OSINT agent's findings (Member 1, `osint_output.json`) to incidents: a CVE on an affected host whose ATT&CK technique the incident shows, or a leaked account used in the incident. Raises the score a little, adds checks, and answers every OSINT hunt request (found in which incident, or nothing in the logs). Intel never creates an incident by itself |
+| 8. Report | `soc/report.py` | `report.md` for people; `incidents.json`, `alerts.json`, `suppressed.json`, `health.json`, `intel.json` for other tools |
 
 ## Logs it reads
 
@@ -58,6 +59,7 @@ incidents = analyse("soc/sample_logs")["incidents"]   # JSON-ready: for llm_advi
 | Windows | Sysmon: process created (1), network connection (3), file created (11), JSON lines | `windows_sysmon` | export like the Security log |
 | Network sensor | Zeek `conn.log` (JSON or default TSV) | `zeek_conn` | Zeek on a SPAN/mirror port |
 | Mail gateway | Verdict log, JSON lines (`ts, direction, client_ip, from, to[], subject, attachments[], verdict, action`) | `mail_gateway` | gateway export |
+| Mail events | JSON lines (`timestamp, event: email_delivered/url_clicked, user, message_id, verdict, url`) | `mail_events` | lab demo |
 
 See `soc/collect/README.md` for the one-time setup on each machine.
 
@@ -81,6 +83,7 @@ See `soc/collect/README.md` for the one-time setup on each machine.
 | PROC-003 | Scheduled task created by a user account (Windows 4698) | T1053.005 |
 | PROC-004 | Program file written into a user profile (Sysmon) | T1105 |
 | MAIL-001 | Mail with a risky attachment (.docm, .js, .iso, …) delivered to a user | T1566.001 |
+| MAIL-002 | User clicked a link in a mail flagged as phishing | T1566.002, T1204.001 |
 | SYS-001 | New service installed (Windows) | T1543.003 |
 | SYS-002 | Service started that never ran before (Ubuntu) | T1543.002 |
 | SYS-003 | Firewall rule or setting changed | T1562.004 |
@@ -102,9 +105,11 @@ window), `distinct_threshold` (N unique values for one target), `sequence` (step
 | `sources.yaml` | Which file is which: parser, host, `utc_offset` for logs in local time, how often it normally writes |
 | `assets.yaml` | Known machines: host, IP, role, criticality (1–5); admin IPs; night hours; optional `internal_nets` (CIDRs, default the private ranges) and `public_services` (`[{host, ports}]`: ports a server offers to the internet on purpose) |
 | `maintenance.yaml` | Approved change tickets: hosts, time window, and what each is allowed to do |
+| `osint_output.json` (optional) | Threat intel from `backend/osint_agent.py`. If the log folder has none, `backend/data/osint_output.json` is used |
 
 Start from the files in `soc/sample_logs/` (2 machines). For a full base (50 devices, 2 days, 4 attacks, maintenance, a
-silent log source, answer key) run `python backend/soc/fleet/make_fleet.py`: see [`fleet/README.md`](fleet/README.md). Later the machine list can come from `backend/data/assets.json` (Member 1).
+silent log source, answer key) run `python backend/soc/fleet/make_fleet.py`: see [`fleet/README.md`](fleet/README.md). Real logs from the team's lab VMs
+(anonymised) are in [`lab_logs/`](lab_logs/README.md). Later the machine list can come from `backend/data/assets.json` (Member 1).
 
 ## Output for the rest of the project
 

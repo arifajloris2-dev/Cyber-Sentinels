@@ -1,0 +1,6 @@
+# Real lab logs from the team's VMs (anonymised with anonymise.py). One Windows VM, renamed during setup:
+# MINWINPC -> WIN-0RKVQU2JH17 -> DESKTOP-U3ALSIH, so one file holds all three names.
+baseline_hours: 24
+sources:
+  - {name: lab-win-events, parser: windows_events, path: lab-win_events.jsonl, expected_every_min: 240}
+  - {name: lab-mail-events, parser: mail_events, path: lab-mail_events.jsonl, host: mail-lab, expected_every_min: 240}
