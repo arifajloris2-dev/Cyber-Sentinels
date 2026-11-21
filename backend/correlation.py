@@ -48,6 +48,9 @@ def write_report(log_folder, out_folder=None) -> Path:
 
 
 if __name__ == "__main__":
+    for stream in (sys.stdout, sys.stderr):   # Windows pipes default to cp1252, which cannot print "→"
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     folder = sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).resolve().parent / "soc" / "sample_logs")
     out = write_report(folder)
     print((out / "report.md").read_text(encoding="utf-8"))
