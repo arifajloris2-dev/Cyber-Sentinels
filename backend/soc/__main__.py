@@ -8,6 +8,7 @@ Run from the backend/ folder:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -58,7 +59,10 @@ def main(argv=None):
         r = run(Path(a.folder))
         out = Path(a.out) if a.out else Path(a.folder) / "out"
         sys.stdout.write(report.write(r, out))
-        print(f"\nWritten: {out / 'report.md'}, incidents.json, alerts.json, suppressed.json, health.json")
+        from .verify import AuditLog
+        n = AuditLog(os.environ.get("SOC_AUDIT_FILE") or None).record_verdicts(r["incidents"] + r["singles"])
+        print(f"\nWritten: {out / 'report.md'}, incidents.json, alerts.json, suppressed.json, health.json, "
+              f"verification.json · {n} new audit line(s)")
     elif a.cmd == "replay":
         for x in replay(Path(a.folder)):
             title = x["incident"].replace("\u2192", "->")

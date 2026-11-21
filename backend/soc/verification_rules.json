@@ -1,0 +1,50 @@
+{
+  "version": "1.0",
+  "about": "Alert Verification Engine settings (backend/soc/verify.py). Users, zones and maintenance tickets are NOT repeated here: they are read from the log folder's assets.yaml / maintenance.yaml.",
+
+  "high_risk_severity": 8,
+  "high_risk_why": "An alert this severe is never dismissed: the incident is at least 'suspicious'.",
+
+  "never_benign_rules": ["CRED-*", "PRIV-001", "LAT-002", "IMP-*", "EXF-001", "SYS-004", "IOC-001"],
+  "never_benign_why": "Credential theft, privileged group change, pass-the-hash, ransomware/backup deletion, exfiltration, log clearing and operator-imported indicators: never benign, whoever did them.",
+
+  "suspicious_min_concerns": 2,
+  "suspicious_min_concerns_why": "Two independent warning signs (compromised account, unknown address, forbidden zone traffic, several attack stages) make an incident 'suspicious' even without a high-risk rule.",
+
+  "inconclusive_when": {
+    "silent_source_on_incident_host": true,
+    "single_source": true,
+    "confidence_below": 0.6,
+    "why": "Missing evidence (silent source, low confidence) is never proof of normal behaviour: at best 'inconclusive'. Evidence from one source only is 'inconclusive' unless an authorized activity below covers it."
+  },
+
+  "zone_violation_rules": ["NET-008"],
+
+  "shared_host_roles": ["file server", "print server", "mail server"],
+  "shared_host_roles_why": "Machines every member of staff may use; any other machine needs to be the user's own (home) machine, or the user must be a privileged admin working from the jump host.",
+
+  "authorized_activities": [
+    {
+      "name": "Known user mistypes the password, then logs on",
+      "role": "*",
+      "zones": ["USERS", "SERVERS"],
+      "rules_expected": ["AUTH-001", "AUTH-004"],
+      "why": "A known, non-compromised user from their own machine to a machine they may use; nothing else happened afterwards."
+    },
+    {
+      "name": "Linux admin opens a root shell from the jump host",
+      "account": "adm.ops",
+      "hosts": ["*"],
+      "rules_expected": ["PRIV-002"],
+      "hours": [8, 18],
+      "why": "Daily administration by the Linux admin account during working hours."
+    },
+    {
+      "name": "Helpdesk changes membership of a normal group",
+      "role": "helpdesk",
+      "hosts": ["*"],
+      "rules_expected": ["PRIV-003"],
+      "why": "Helpdesk may add colleagues to non-privileged groups; a privileged group (PRIV-001) is never covered."
+    }
+  ]
+}

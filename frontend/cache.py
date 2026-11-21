@@ -26,7 +26,7 @@ KNOWLEDGE = ROOT / "backend" / "data" / "knowledge"
 ENGINE_FILE, AI_FILE = "engine_cache.json.gz", "ai_explanations.json"
 TIME_KEYS = {"time", "time_end", "start", "end", "first", "baseline_end"}
 ENGINE_KEYS = ["incidents", "singles", "alerts", "suppressed", "maintenance", "health", "agents", "intel", "event_list",
-               "stats", "events", "rules", "baseline_end", "end", "seconds", "cfg"]
+               "stats", "events", "rules", "baseline_end", "end", "seconds", "cfg", "verification"]
 
 
 def _iso(o: Any) -> str:
@@ -62,7 +62,8 @@ def engine_fingerprint(log_dir: Path) -> str:
     """Changes when any log/settings file, rule, imported knowledge file or engine source file changes."""
     h = hashlib.sha256()
     for line in (_stat_lines(Path(log_dir), skip="out") + _stat_lines(SOC / "rules", "*.yaml")
-                 + _stat_lines(KNOWLEDGE, "*.txt") + _stat_lines(SOC, "*.py", skip="tests")):
+                 + _stat_lines(KNOWLEDGE, "*.txt") + _stat_lines(SOC, "*.py", skip="tests")
+                 + _stat_lines(SOC, "verification_rules.json")):
         h.update(line.encode() + b"\n")
     return h.hexdigest()
 

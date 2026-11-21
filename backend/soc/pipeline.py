@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from . import agents, dedupe, health, intel, knowledge, noise
+from . import agents, dedupe, health, intel, knowledge, noise, verify
 from .correlate import correlate, priority
 from .detect import enrich, load_rules, run_rules
 from .parsers import read_all
@@ -87,4 +87,10 @@ def run(folder: Path, until: datetime | None = None, loaded=None, rules_dir: Pat
     intel.attach(incidents, threat, priority)
     incidents.sort(key=lambda x: -x["score"])
     agents.link_incidents(r.get("agents", []), incidents)
-    return {**r, "incidents": incidents, "singles": singles, "intel": threat, "seconds": round(time.perf_counter() - t0, 3)}
+    # second opinion: suspicious / inconclusive / likely_benign with reasons (verify.py; adds `verification` only)
+    checked = verify.apply(incidents, singles, r["health"], r["cfg"]["assets"])
+    out = {**r, "incidents": incidents, "singles": singles, "intel": threat, "verification": checked}
+    out["verification"]["run_id"] = verify.run_id(out)
+    for item in incidents + singles:
+        item["verification"]["engine_run"] = out["verification"]["run_id"]
+    return {**out, "seconds": round(time.perf_counter() - t0, 3)}

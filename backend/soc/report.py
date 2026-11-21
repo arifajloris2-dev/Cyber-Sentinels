@@ -24,9 +24,24 @@ def write(r: dict, out: Path) -> str:
     (out / "suppressed.json").write_text(_j({"tickets": r["maintenance"], "alerts": r["suppressed"]}), encoding="utf-8")
     (out / "health.json").write_text(_j({"sources": r["health"], "parsing": [{k: v for k, v in s.items() if k != "times"} for s in r["stats"]]}),
                                      encoding="utf-8")
+    items = r["incidents"] + r.get("singles", [])
+    (out / "verification.json").write_text(_j({
+        "ruleset": (r.get("verification") or {}).get("ruleset"), "run_id": (r.get("verification") or {}).get("run_id"),
+        "error": (r.get("verification") or {}).get("error"),
+        "items": [{"id": i["id"], "kind": "incident" if "alerts" in i else "single alert", "title": i.get("title"),
+                   **(i.get("verification") or {})} for i in items]}), encoding="utf-8")
     md = markdown(r)
     (out / "report.md").write_text(md, encoding="utf-8")
     return md
+
+
+def _verdict_lines(i: dict) -> list[str]:
+    v = i.get("verification")
+    if not v:
+        return []
+    why = "; ".join(f"{x['text']}" for x in v.get("reasons", [])[:4])
+    return [f"**Verdict: {v['verdict']}**" + (" · sent to the local AI for explanation" if v.get("forward_to_ai") else "")
+            + (f": {why}" if why else ""), ""]
 
 
 def markdown(r: dict) -> str:
@@ -37,6 +52,7 @@ def markdown(r: dict) -> str:
     for i in r["incidents"]:
         L += [f"## {i['priority']} · {i['title']}", "",
               f"`{i['id']}` · {i['start']:%Y-%m-%d %H:%M} → {i['end']:%H:%M} UTC · score {i['score']}", "",
+              *_verdict_lines(i),
               f"**Confidence {i['confidence']:.0%}**: " + "; ".join(i["confidence_reasons"]), "",
               "**Hosts:** " + ", ".join(f"{h['host']} ({h['role']}, criticality {h['criticality']})" for h in i["hosts"]),
               f"**Accounts:** {', '.join(i['users']) or '-'} · **Unknown addresses:** {', '.join(i['unknown_ips']) or '-'}", "",
@@ -60,7 +76,10 @@ def markdown(r: dict) -> str:
               "**Suggested checks** (advice only: nothing was changed on any system):"]
         L += [f"- *{s['type']}*: {s['step']}" for s in i["next_checks"]] + [""]
     if r["singles"]:
-        L += ["## Single alerts (not escalated)", ""] + [f"- {a['time']:%m-%d %H:%M} {a['rule']}: {a['text']}" for a in r["singles"]] + [""]
+        L += ["## Single alerts (not escalated)", ""] + [
+            f"- {a['time']:%m-%d %H:%M} {a['rule']}: {a['text']}"
+            + (f" · **Verdict: {a['verification']['verdict']}** ({a['verification']['reasons'][0]['text']})"
+               if (a.get("verification") or {}).get("reasons") else "") for a in r["singles"]] + [""]
     intel = r.get("intel") or {}
     if intel.get("hunts") or intel.get("findings"):
         L += ["## OSINT hunt requests (from Member 1)", ""]

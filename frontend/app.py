@@ -26,6 +26,7 @@ from AI_Log_Analyzer.ai_log_analyzer import (
     check_ollama_model,
 )
 from backend.soc import knowledge as kb_store
+from backend.soc import verify as verifier
 from frontend import cache as result_cache
 from frontend import scenario as exercise
 from frontend import search as event_search
@@ -51,6 +52,9 @@ COLORS = {
     "green": "#23774d",
     "violet": "#6a4fc9",
 }
+VERDICT_STYLE = {"suspicious": ("SUSPICIOUS", "#fdecef", "#c2364f", "gpp_maybe"),
+                 "inconclusive": ("INCONCLUSIVE", "#fff3df", "#c27400", "help"),
+                 "likely_benign": ("LIKELY BENIGN", "#e8f5ed", "#23774d", "verified_user")}
 PRIORITY_COLOR = {"P1": COLORS["red"], "P2": COLORS["amber"], "P3": COLORS["blue"]}
 STAGE_ICON = {"entry": "login", "execution": "terminal", "credential theft": "key", "lateral movement": "swap_horiz",
               "privilege escalation": "admin_panel_settings", "command and control": "settings_input_antenna",
@@ -234,6 +238,9 @@ class DashboardPage:
         # explanations prepared in advance (python -m frontend.precompute) are shown instantly
         self.ai_cache = result_cache.AiCache(getattr(provider, "log_dir", None))
         self.ai_meta: dict[str, dict] = {}
+        # verifier audit trail (append-only file; SOC_AUDIT_FILE overrides the default backend/data/audit/verification.jsonl)
+        self.audit = verifier.AuditLog(os.environ.get("SOC_AUDIT_FILE") or None)
+        self.explain_anyway: set[str] = set()
         self.ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
         self.ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
         self._build()
@@ -518,6 +525,8 @@ class DashboardPage:
                 </q-td>""")
             self.alert_table.on("close_alert", lambda e: self._close_alert(e.args))
             self.alert_table.on("reopen_alert", lambda e: self._reopen_alert(e.args))
+        with self._card("AUDIT  ·  last 50 decisions (verifier and operator), kept in an append-only file"):
+            self.audit_box = ui.column().classes("w-full gap-0 mt-2").style("max-height:420px;overflow-y:auto")
 
     # ---------------------------------------------------------------- exercise scenario (answer key vs findings)
     def _build_scenario(self) -> None:
@@ -877,6 +886,10 @@ class DashboardPage:
         self.status_line.style(f"color:{COLORS['muted']}")
         if self.selected_incident_id not in {str(i.get("id")) for i in self.incidents}:
             self.selected_incident_id = str(self.incidents[0].get("id")) if self.incidents else None
+        try:
+            self.audit.record_verdicts(list(snapshot.incidents) + list(snapshot.singles), None)
+        except OSError as exc:                     # a read-only disk must not stop the console
+            logging.getLogger(__name__).warning("audit log not written: %s", exc)
         self._render_counts()
         self._render_overview()
         self._render_priority_queue()
@@ -885,6 +898,7 @@ class DashboardPage:
         self._render_sources()
         self._render_member_one(snapshot)
         self._render_alerts()
+        self._render_audit()
         self._render_entity_options()
         self._render_knowledge()
         self._render_scenario()
@@ -1001,8 +1015,10 @@ class DashboardPage:
                     ui.badge(pr).style(f"background:{PRIORITY_COLOR.get(pr)};color:white")
                     ui.label(f"{_when(inc.get('start'), '%m-%d %H:%M')} · score {inc.get('score', '—')}").classes(
                         "text-xs").style(f"color:{COLORS['muted']}")
-                if closed:
-                    ui.badge(f"CLOSED · {self.closed_incidents[iid]['reason']}").style("background:#e8f5ed;color:#23774d")
+                with ui.row().classes("items-center gap-1 no-wrap"):
+                    self._verdict_badge(inc)
+                    if closed:
+                        ui.badge(f"CLOSED · {self.closed_incidents[iid]['reason']}").style("background:#e8f5ed;color:#23774d")
             ui.label(_short(inc.get("title"), 110 if compact else 150)).classes("text-sm font-semibold mt-1")
             if not compact:
                 hosts = ", ".join(h.get("host", "") for h in inc.get("hosts", [])[:4])
@@ -1011,6 +1027,18 @@ class DashboardPage:
                 with ui.row().classes("gap-1 mt-1 items-center"):
                     for st in inc.get("stages", []):
                         ui.icon(STAGE_ICON.get(st, "circle")).classes("text-base").style(f"color:{COLORS['navy_light']}").tooltip(st)
+
+    @staticmethod
+    def _verdict_badge(item: Record, chip: bool = False) -> None:
+        v = (item.get("verification") or {}).get("verdict")
+        if v not in VERDICT_STYLE:
+            return
+        label, bg, fg, icon = VERDICT_STYLE[v]
+        tip = "; ".join(r.get("text", "") for r in (item.get("verification") or {}).get("reasons", [])[:3])
+        if chip:
+            ui.chip(f"verifier: {label.lower()}", icon=icon).props("dense").style(f"background:{bg};color:{fg}").tooltip(tip)
+        else:
+            ui.badge(label).style(f"background:{bg};color:{fg};font-weight:700").tooltip(tip)
 
     def _render_priority_queue(self) -> None:
         self.incident_queue.clear()
@@ -1063,6 +1091,7 @@ class DashboardPage:
         self.close_button.style(f"background:{COLORS['muted'] if closed else COLORS['green']};color:white")
         self.incident_badges.clear()
         with self.incident_badges:
+            self._verdict_badge(incident, chip=True)
             for acc in incident.get("compromised_accounts", []):
                 ui.chip(f"compromised: {acc}", icon="person_off").props("dense").style("background:#fdecef;color:#c2364f")
             for ip in incident.get("unknown_ips", [])[:4]:
@@ -1160,6 +1189,21 @@ class DashboardPage:
     def _render_checks(self, incident: Record) -> None:
         self.checks_box.clear()
         with self.checks_box:
+            v = incident.get("verification") or {}
+            if v.get("verdict") in VERDICT_STYLE:
+                label, bg, fg, icon = VERDICT_STYLE[v["verdict"]]
+                with ui.element("div").classes("w-full p-3 mb-2").style(f"background:{bg};border-radius:10px"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.icon(icon).style(f"color:{fg}")
+                        ui.label(f"VERIFIER VERDICT: {label}").classes("text-sm font-bold").style(f"color:{fg}")
+                        ui.label("sent to the local AI" if v.get("forward_to_ai") else "not sent to the AI automatically").classes(
+                            "text-xs").style(f"color:{COLORS['muted']}")
+                    for r in v.get("reasons", []):
+                        ev = ", ".join(r.get("evidence", [])[:3])
+                        ui.label(f"• [{r.get('rule')}] {r.get('text')}" + (f"  ({ev})" if ev else "")).classes(
+                            "text-xs soc-explanation-text").style(f"color:{COLORS['ink']}")
+                    ui.label(f"Deterministic rules {v.get('ruleset') or ''} · the AI never changes this verdict · "
+                             "the operator decides").classes("text-xs mt-1").style(f"color:{COLORS['muted']}")
             ui.label("SUGGESTED CHECKS (advice only: the operator decides)").classes("soc-title")
             for step in incident.get("next_checks", []):
                 kind = str(step.get("type", "verify"))
@@ -1185,6 +1229,7 @@ class DashboardPage:
         iid = str(inc.get("id"))
         if iid in self.closed_incidents:
             self.closed_incidents.pop(iid)
+            self._audit_operator(iid, "reopen")
             ui.notify(f"{iid} reopened", type="info")
             self._after_close_change()
             return
@@ -1201,6 +1246,7 @@ class DashboardPage:
 
     def _reopen_alert(self, row: dict) -> None:
         self.closed_alerts.pop(str(row.get("id")), None)
+        self._audit_operator(str(row.get("id")), "reopen")
         owner = self._incident_of_alert().get(str(row.get("id")))
         if owner is not None and str(owner.get("id")) in self.closed_incidents:
             ui.notify("This alert belongs to a closed incident; reopen the incident to reopen its alerts.", type="warning")
@@ -1213,10 +1259,46 @@ class DashboardPage:
         info = {"reason": self.close_reason.value or "Resolved", "note": self.close_note.value or "",
                 "at": datetime.now(timezone.utc).strftime("%H:%M UTC")}
         (self.closed_incidents if kind == "incident" else self.closed_alerts)[key] = info
+        self._audit_operator(key, "close", info["reason"], info["note"])
         self.close_dialog.close()
         ui.notify(f"{kind.capitalize()} closed ({info['reason']}) for this session", type="positive")
         self._closing = None
         self._after_close_change()
+
+    def _audit_operator(self, key: str, action: str, reason: str = "", note: str = "") -> None:
+        """Write the human decision to the audit trail (the hiding on screen stays session-only)."""
+        try:
+            self.audit.record_operator(key, action, reason, note)
+        except (OSError, ValueError) as exc:
+            logging.getLogger(__name__).warning("audit log not written: %s", exc)
+            ui.notify("The decision could not be written to the audit log", type="warning")
+        self._render_audit()
+
+    def _render_audit(self) -> None:
+        box = getattr(self, "audit_box", None)
+        if box is None:
+            return
+        box.clear()
+        try:
+            rows = self.audit.last(50)
+        except OSError:
+            rows = []
+        with box:
+            if not rows:
+                ui.label("No decisions recorded yet.").classes("text-xs").style(f"color:{COLORS['muted']}")
+            for r in rows:
+                human = r.get("actor") == "operator"
+                v = r.get("verdict")
+                with ui.row().classes("w-full items-start no-wrap gap-2 py-1").style("border-bottom:1px solid #eef2f6"):
+                    ui.icon("person" if human else "rule").style(
+                        f"color:{COLORS['blue'] if human else VERDICT_STYLE.get(v, ('', '', COLORS['muted']))[2]}")
+                    with ui.column().classes("gap-0 grow").style("min-width:0"):
+                        what = (f"operator {r.get('action')}" + (f" · {r.get('reason')}" if r.get("reason") else "")
+                                if human else f"verifier · {VERDICT_STYLE.get(v, (str(v),))[0]}")
+                        ui.label(f"{r.get('incident')} · {what}").classes("text-xs font-bold soc-explanation-text")
+                        detail = r.get("note") if human else "; ".join(x.get("text", "") for x in r.get("reasons", [])[:2])
+                        ui.label(f"{_when(r.get('time'), '%d %b %H:%M:%S UTC')}" + (f" · {detail}" if detail else "")).classes(
+                            "text-xs soc-explanation-text").style(f"color:{COLORS['muted']}")
 
     def _after_close_change(self) -> None:
         self._render_counts()
@@ -1549,6 +1631,10 @@ class DashboardPage:
             else:
                 self.ai_status.set_text("Qwen3 summary ready (generated live) · the operator decides")
             with self.explanation_container:
+                vv = (incident.get("verification") or {}).get("verdict")
+                if vv in VERDICT_STYLE:
+                    ui.label(f"Verifier verdict: {VERDICT_STYLE[vv][0]} (deterministic; the AI's view below does not change it)"
+                             ).classes("text-xs font-bold").style(f"color:{VERDICT_STYLE[vv][2]}")
                 ui.label(_text(result.get("commander_summary_en"), _text(result.get("summary")))).classes(
                     "soc-explanation-text text-sm whitespace-pre-wrap")
                 self._explanation_section("UNCERTAINTY", _text(result.get("uncertainty")))
@@ -1570,6 +1656,15 @@ class DashboardPage:
             return
         self.ai_assessment.set_text("ADVISORY")
         self.ai_assessment.style(f"background:#eaf1fc;color:{COLORS['blue']}")
+        v = incident.get("verification") or {}
+        if v and not v.get("forward_to_ai", True) and incident_id not in self.explain_anyway:
+            self.ai_status.set_text("The verifier judged this likely benign, so the AI was not asked automatically.")
+            with self.explanation_container:
+                ui.label(instant_overview(incident)).classes("soc-explanation-text text-sm whitespace-pre-wrap")
+                ui.button("Explain anyway", icon="auto_awesome",
+                          on_click=lambda _=None, k=incident_id, inc=incident: self._explain_anyway(k, inc)).props(
+                    "outline dense no-caps")
+            return
         if error:
             self.ai_status.set_text(error)
         elif self._qwen_config_is_verified():
@@ -1588,6 +1683,10 @@ class DashboardPage:
         # Start automatically only once per incident; after an error wait for "Regenerate explanation".
         if self._qwen_config_is_verified() and not error and incident_id not in self.qwen_in_flight:
             asyncio.create_task(self._generate_explanation(incident))
+
+    def _explain_anyway(self, incident_id: str, incident: Record) -> None:
+        self.explain_anyway.add(incident_id)
+        self._render_explanation(incident)
 
     def _explanation_section(self, title: str, text: str) -> None:
         ui.label(title).classes("text-xs font-bold").style(f"color:{COLORS['navy']}")

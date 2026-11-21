@@ -183,6 +183,41 @@ silent log source, answer key) run `python backend/soc/fleet/make_fleet.py`: see
 `id, priority, score, title, start, end, stages, confidence, confidence_reasons, hosts, users, unknown_ips,
 attack (ATT&CK techniques), alerts (each with its raw evidence lines), links (why they belong together), next_checks`.
 
+Every incident and single alert also has `verification` (see the next section).
+
+## Verification (`soc/verify.py`)
+
+A deterministic second opinion on what the engine found. It does not detect; it judges, explains, keeps an audit
+trail and decides which incidents go to the local AI. Built from [`docs/alert-verifier-prompt.md`](docs/alert-verifier-prompt.md).
+
+| Verdict | When | Sent to the AI |
+|---|---|---|
+| `suspicious` | a high-risk alert (severity ≥ 8, or a never-benign rule: `CRED-*`, `PRIV-001`, `LAT-002`, `IMP-*`, `EXF-001`, `SYS-004`, `IOC-001`), or two independent warning signs (compromised account, unknown address, forbidden zone traffic `NET-008`, several attack stages) | yes |
+| `inconclusive` | one warning sign, missing evidence (a silent log source on an incident machine, low confidence), evidence from one source only, or unusual activity that is not proven authorized | yes |
+| `likely_benign` | positive proof only: known, non-compromised users on machines they may use (own machine, a shared server, or privileged admin), no unknown address, healthy sources, and every rule covered by one authorized activity | no ("Explain anyway" in the dashboard) |
+
+Missing evidence is never proof of normal behaviour, and a high-risk event is never dismissed, whoever did it.
+Each verdict has `reasons` (`rule`, `text`, `evidence` as `source:line`), `forward_to_ai`, `evidence_hash`, `ruleset`.
+
+- **Settings:** `soc/verification_rules.json` (thresholds, never-benign rules, authorized activities, each with a `why`).
+  Users, zones and machines are read from the log folder's `assets.yaml`, never repeated. A broken settings file gives
+  a clear error and `inconclusive` for everything, never a crash.
+- **Audit trail:** append-only JSON Lines in `backend/data/audit/verification.jsonl` (local only, git-ignored; set
+  `SOC_AUDIT_FILE` to use another file). One line per decision: time (UTC), incident, verdict, reasons, evidence, rule
+  set version/hash, engine run id, `actor` (`verifier` or `operator`). An unchanged verdict on the same evidence is not
+  written twice. Dashboard Close/Reopen adds an operator line (the hiding on screen stays session-only). Lines are never
+  rewritten or deleted.
+- **AI:** `verify.explain(incidents, ...)` sends only `forward_to_ai` incidents through the existing
+  `build_dashboard_incident` + `analyze_incident` (both injectable for tests). Ollama down → `ai: "unavailable"`, the
+  verdict stays. The AI's `triage_assessment` is shown next to the verdict and never changes it.
+- **Output:** `verification.json` and a **Verdict** line per incident in `report.md`
+  (`python backend/correlation.py backend/soc/fleet/logs`).
+- **Result on the 50-device base:** the 7 planted attacks are `suspicious` (A1 also carries the missing-evidence reason
+  for the silent gate firewall log); the mistyped-password single alert (B1) is `likely_benign`; no look-alike or
+  maintenance is `suspicious`. Tests: `soc/tests/test_verifier.py` (scenarios A–E, bad input, audit, AI forwarding).
+- **Known gap:** look-alikes B5/B6 and the daily routines never reach the verifier, because the engine already sets them
+  aside (maintenance tickets) or raises no alert for them; that is the intended outcome ("not an incident at all").
+
 ## Tested (sample logs: Windows laptop + Ubuntu server)
 
 | Criterion | Result |
@@ -207,6 +242,8 @@ backend/
     noise.py            approved maintenance kept aside
     health.py           silent log sources
     correlate.py        incidents, evidence, confidence, suggested checks
+    verify.py           verdicts (suspicious / inconclusive / likely_benign), audit trail, AI forwarding
+    verification_rules.json  verifier settings
     pipeline.py         runs the two stages
     report.py           report.md + JSON
     attack.py           local MITRE ATT&CK table

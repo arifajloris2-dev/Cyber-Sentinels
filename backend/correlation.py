@@ -16,6 +16,7 @@ from the OSINT agent with its status: which incident covers it, or that the logs
 
 Command line (from backend/):  python correlation.py soc/sample_logs      (also writes <folder>/out/report.md)
 """
+import os
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # so `soc` is found fr
 
 from soc import report  # noqa: E402
 from soc.pipeline import run  # noqa: E402
+from soc.verify import AuditLog  # noqa: E402
 
 
 def analyse(log_folder) -> dict:
@@ -36,9 +38,12 @@ def analyse(log_folder) -> dict:
 
 
 def write_report(log_folder, out_folder=None) -> Path:
-    """Write report.md + incidents.json, alerts.json, suppressed.json, health.json; returns the output folder."""
+    """Write report.md + incidents.json, alerts.json, suppressed.json, health.json, verification.json; returns the folder."""
     out = Path(out_folder) if out_folder else Path(log_folder) / "out"
-    report.write(run(Path(log_folder)), out)
+    r = run(Path(log_folder))
+    report.write(r, out)
+    # verifier decisions go to the append-only audit trail (an unchanged verdict is not written twice)
+    AuditLog(os.environ.get("SOC_AUDIT_FILE") or None).record_verdicts(r["incidents"] + r["singles"])
     return out
 
 
