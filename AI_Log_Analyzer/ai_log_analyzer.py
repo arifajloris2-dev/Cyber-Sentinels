@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import ipaddress
 import json
 import logging
@@ -329,6 +330,19 @@ def build_dashboard_incident(
     if not events:
         raise ValueError("This incident has no evidence events to explain.")
 
+    # only the log sources that matter for THIS incident and are not healthy (a base has ~150 sources; sending all
+    # of them overflowed the model's context and cut off its instructions)
+    incident_hosts = {
+        str(host.get("host", "")).casefold()
+        for host in incident.get("hosts", [])
+        if isinstance(host, dict) and host.get("host")
+    }
+    incident_sources = {
+        str(item.get("source", "")).casefold()
+        for alert in incident.get("alerts", [])
+        for item in alert.get("evidence", [])
+        if item.get("source")
+    }
     context = {
         "deterministic_result": {
             key: incident.get(key)
@@ -352,6 +366,11 @@ def build_dashboard_incident(
         "source_health": [
             {key: source[key] for key in ("source", "host", "events", "ok", "silent") if key in source}
             for source in (sources or [])
+            if not source.get("ok")
+            and (
+                str(source.get("host", "")).casefold() in incident_hosts
+                or str(source.get("source", "")).casefold() in incident_sources
+            )
         ],
         "osint_findings": (threat_findings or [])[:8],
         "other_agent_briefing": (advisories or {}).get(str(incident.get("id", ""))),
@@ -363,15 +382,45 @@ def build_dashboard_incident(
     }, evidence_refs
 
 
-def build_payload(model: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+def allowed_techniques(incident: dict[str, Any] | None) -> dict[str, str]:
+    """Techniques the model may name: the fixed list above plus those the SOC engine mapped for this incident
+    (the engine is the source of truth; the model only explains)."""
+    allowed = dict(MITRE_TECHNIQUES)
+    result = ((incident or {}).get("context") or {}).get("deterministic_result") or {}
+    for t in result.get("attack") or []:
+        if isinstance(t, dict) and t.get("id"):
+            allowed.setdefault(str(t["id"]), str(t.get("name") or t["id"]))
+    return allowed
+
+
+def build_payload(
+    model: str,
+    messages: list[dict[str, str]],
+    evidence_ids: list[str] | None = None,
+    technique_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Ollama request. With evidence_ids / technique_ids, the answer format only allows this incident's event IDs
+    (E1, E2, ...) and techniques, so the model cannot write sentences or invented techniques there."""
+    schema = RESULT_SCHEMA
+    if evidence_ids or technique_ids:
+        schema = copy.deepcopy(RESULT_SCHEMA)
+        if evidence_ids:
+            ids = {"type": "string", "enum": sorted(evidence_ids)}
+            schema["properties"]["evidence"]["items"] = ids
+            schema["properties"]["mitre_attack"]["items"]["properties"]["evidence"]["items"] = ids
+        if technique_ids:
+            schema["properties"]["mitre_attack"]["items"]["properties"]["id"] = {
+                "type": "string", "enum": sorted(technique_ids)}
     return {
         "model": model,
         "messages": messages,
         "stream": False,
         "think": False,  # disable Qwen3 reasoning output
-        "format": RESULT_SCHEMA,  # structured outputs
+        "format": schema,  # structured outputs
         "keep_alive": "5m",
-        "options": {"temperature": 0, "num_ctx": 4096, "num_predict": 512},
+        # num_ctx: a real incident prompt is ~3-4k tokens; with 4096 Ollama silently cut its start (the instructions).
+        # num_predict: room for the summaries plus the mitre_attack list.
+        "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 1024},
     }
 
 
@@ -381,6 +430,12 @@ def _local_api_url(base_url: str, path: str) -> str:
         raise OllamaError("Ollama must use a local HTTP(S) URL such as http://127.0.0.1:11434.")
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
         raise OllamaError("OLLAMA_URL must be a local base URL without a path, query, or fragment.")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise OllamaError("OLLAMA_URL must use Ollama's port 11434.") from exc
+    if port != 11434:
+        raise OllamaError("OLLAMA_URL must use Ollama's port 11434.")
     hostname = parsed.hostname.lower()
     trusted_host = os.environ.get("TRUSTED_OLLAMA_IP")
 
@@ -398,6 +453,13 @@ def _local_api_url(base_url: str, path: str) -> str:
         raise OllamaError("Ollama server is not an approved local address.")
 
     return base_url.rstrip("/") + path
+
+def configured_ollama_url() -> str:
+    """Return the validated local Ollama URL from the environment (OLLAMA_URL)."""
+    base_url = os.environ.get("OLLAMA_URL", DEFAULT_URL)
+    _local_api_url(base_url, "/api/tags")
+    return base_url.rstrip("/")
+
 
 def check_ollama_model(base_url: str, model: str, timeout: float = 2.0) -> None:
     """Confirm that the local Ollama server has the requested model installed."""
@@ -458,28 +520,63 @@ def strip_think(text: str) -> str:
     """Remove <think>...</think> blocks (fallback if think=false is ignored)."""
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-def validate_mitre(report, valid_ids):
-    for technique in report["mitre_attack"]:
-        technique_id = technique["id"]
-
-        if MITRE_TECHNIQUES.get(technique_id) != technique["name"]:
-            raise ValueError(
-                f"Invalid MITRE mapping: {technique_id}"
-            )
-
-        if not technique["evidence"]:
-            raise ValueError("MITRE mapping has no evidence")
-
-        if not set(technique["evidence"]).issubset(valid_ids):
-            raise ValueError("Invalid MITRE evidence IDs")
-
+def validate_mitre(report, valid_ids, allowed: dict[str, str] | None = None):
+    """Keep only techniques that are allowed and backed by this incident's evidence; use the official name.
+    A wrong entry is dropped (and logged) instead of throwing away an otherwise valid explanation."""
+    allowed = allowed or MITRE_TECHNIQUES
+    kept = []
+    for technique in report.get("mitre_attack", []):
+        technique_id = str(technique.get("id", ""))
+        evidence = [e for e in dict.fromkeys(technique.get("evidence", [])) if e in valid_ids]
+        if technique_id not in allowed or not evidence:
+            log.warning("Dropping unsupported MITRE mapping: %s", technique)
+            continue
+        kept.append({"id": technique_id, "name": allowed[technique_id], "evidence": evidence})
+    report["mitre_attack"] = kept
     return report
 
-def validate_response(raw: str, valid_ids: set[str]) -> dict[str, Any]:
-    """Parse, schema-check, and drop evidence IDs that are not in the incident."""
+def _shorten(text: str, limit: int) -> str:
+    """Cut text to at most `limit` characters at a sentence or word boundary, ending with an ellipsis."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    for mark in (". ", "; ", ", ", " "):
+        at = cut.rfind(mark)
+        if at >= limit // 2:
+            cut = cut[: at + (1 if mark == ". " else 0)]
+            break
+    return cut.rstrip(" ,;") + "\u2026"
+
+
+def fit_lengths(data: Any) -> Any:
+    """The local model often writes a little more than the format allows (Ollama does not enforce maxLength or
+    maxItems). Shorten those parts instead of throwing away an otherwise valid explanation."""
+    if not isinstance(data, dict):
+        return data
+    for key, spec in RESULT_SCHEMA["properties"].items():
+        value = data.get(key)
+        if spec.get("type") == "string" and isinstance(value, str) and "maxLength" in spec:
+            if len(value) > spec["maxLength"]:
+                log.warning("Shortening %s from %d to %d characters", key, len(value), spec["maxLength"])
+                data[key] = _shorten(value, spec["maxLength"])
+        elif spec.get("type") == "array" and isinstance(value, list):
+            if key == "evidence":
+                value = list(dict.fromkeys(value))          # the same ID twice is still one citation
+            value = value[: spec.get("maxItems", len(value))]
+            limit = spec.get("items", {}).get("maxLength")
+            if limit:
+                value = [_shorten(v, limit) if isinstance(v, str) else v for v in value]
+            data[key] = value
+    return data
+
+
+def validate_response(raw: str, valid_ids: set[str], allowed: dict[str, str] | None = None) -> dict[str, Any]:
+    """Parse, shorten over-long parts, schema-check, drop evidence IDs and techniques that are not supported."""
     text = strip_think(raw)
     try:
-        data = json.loads(text)
+        data = fit_lengths(json.loads(text))
+        if isinstance(data, dict):
+            data.setdefault("mitre_attack", [])   # no technique named is a valid answer, not a broken one
     except json.JSONDecodeError as exc:
         raise ValueError(f"Response is not valid JSON: {exc}") from exc
 
@@ -493,21 +590,22 @@ def validate_response(raw: str, valid_ids: set[str]) -> dict[str, Any]:
         data["evidence"] = [e for e in data["evidence"] if e in valid_ids]
     if not data["evidence"]:
         raise ValueError("Response did not cite any valid evidence IDs from the incident.")
-    return validate_mitre(data, valid_ids)
+    return validate_mitre(data, valid_ids, allowed)
 
 def analyze_incident(
     incident: dict[str, Any], base_url: str, model: str, timeout: float, retries: int
 ) -> dict[str, Any]:
     """Query the model, retrying (with error feedback) if the output is invalid."""
     valid_ids = {str(ev["id"]) for ev in incident["events"]}
+    allowed = allowed_techniques(incident)
     messages = build_messages(incident)
     raw = ""
     last_error = "unknown error"
 
     for attempt in range(retries + 1):
-        raw = query_ollama(base_url, build_payload(model, messages), timeout)
+        raw = query_ollama(base_url, build_payload(model, messages, sorted(valid_ids), sorted(allowed)), timeout)
         try:
-            return validate_response(raw, valid_ids)
+            return validate_response(raw, valid_ids, allowed)
         except ValueError as exc:
             last_error = str(exc)
             log.warning("Attempt %d/%d failed: %s", attempt + 1, retries + 1, last_error)
