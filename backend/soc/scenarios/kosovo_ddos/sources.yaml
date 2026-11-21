@@ -1,0 +1,6 @@
+# Kosovo government services disruption replay (team scenario, synthetic). Both scenarios start at the same time
+# and are judged independently (each against its own first sample).
+baseline_hours: 24
+sources:
+  - {name: gov-portal-health, parser: portal_health, path: portal_health.json, host: demo-government-portal,
+     start: "2026-11-22T09:00:00+00:00", expected_every_min: 60}

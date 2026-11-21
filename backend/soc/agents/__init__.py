@@ -76,13 +76,19 @@ def summarise(events: list[dict], alerts: list[dict], suppressed: list[dict], he
         base_rate, now_rate = _per_hour(len(base), first, baseline_end), _per_hour(len(now), baseline_end, end)
         busiest = Counter(e["time"].hour for e in base).most_common(1)
         ctx = {"alerts": mine, "baseline": base}
+        short = not now      # a replay or lab capture shorter than the baseline: report it as a whole, no "vs normal"
+        try:
+            lines = a.highlights([e for e in (now or evs) if not e.get("ticket")], {**ctx, "baseline": []} if short else ctx) \
+                if a.highlights else []
+        except Exception as exc:  # one agent's summary must never stop the analysis
+            lines = [f"(summary unavailable: {type(exc).__name__})"]
         out.append({
             "agent": a.name, "title": a.title, "watches": a.watches,
             "sources": sorted(names), "hosts": len({e.get("host") for e in evs if e.get("host")}),
-            "events": len(evs), "events_today": len(now),
-            "normal": {"per_hour": base_rate, "busiest_hour_utc": busiest[0][0] if busiest else None},
-            "today": {"per_hour": now_rate,
-                      "change_pct": round((now_rate - base_rate) / base_rate * 100) if base_rate else None},
+            "events": len(evs), "events_today": len(evs) if short else len(now),
+            "normal": {"per_hour": None if short else base_rate, "busiest_hour_utc": busiest[0][0] if busiest else None},
+            "today": {"per_hour": _per_hour(len(evs), first, end) if short else now_rate,
+                      "change_pct": None if short or not base_rate else round((now_rate - base_rate) / base_rate * 100)},
             "actions": dict(Counter(f"{e.get('type')}/{e.get('action')}" for e in (now or evs)).most_common(6)),
             "maintenance_filtered": sum(1 for e in (now or evs) if e.get("ticket")),
             "alerts": len(mine), "alerts_by_rule": dict(Counter(x["rule"] for x in mine).most_common()),
@@ -90,10 +96,8 @@ def summarise(events: list[dict], alerts: list[dict], suppressed: list[dict], he
                            for x in sorted(mine, key=lambda x: (-x["severity"], x["time"]))[:3]],
             "suppressed": len(quiet),
             "silent_sources": [h["source"] for h in health if h["source"] in names and not h["ok"]],
-            # highlights describe what is NOT explained by an approved ticket (the ticketed part is counted above);
-            # a log set shorter than the baseline (a lab capture) is described as a whole
-            "highlights": a.highlights([e for e in (now or evs) if not e.get("ticket")], ctx if now else {**ctx, "baseline": []})
-            if a.highlights else [],
+            # highlights describe what is NOT explained by an approved ticket (the ticketed part is counted above)
+            "highlights": lines,
             "incidents": [],
         })
     return out

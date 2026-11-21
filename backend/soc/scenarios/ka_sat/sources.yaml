@@ -1,0 +1,5 @@
+# KA-SAT-inspired replay (team scenario, synthetic). Times = start + offset_seconds.
+baseline_hours: 24
+sources:
+  - {name: ka-sat-mgmt, parser: management_events, path: ka_sat_events.json, host: demo-management-gateway,
+     start: "2026-11-22T09:00:00+00:00", expected_every_min: 60}

@@ -76,8 +76,9 @@ def markdown(r: dict) -> str:
             change = a["today"]["change_pct"]
             trend = f", {'+' if change and change > 0 else ''}{change}% vs normal" if change is not None else ""
             L += [f"**{a['title']}** · {len(a['sources'])} log source(s) on {a['hosts']} host(s) · "
-                  f"{a['events_today']:,} events ({a['today']['per_hour']}/h; normal {a['normal']['per_hour']}/h{trend}) · "
-                  f"{a['maintenance_filtered']} approved-maintenance events set aside · {a['alerts']} alert(s)"
+                  + (f"{a['events_today']:,} events ({a['today']['per_hour']}/h; normal {a['normal']['per_hour']}/h{trend}) · "
+                     if a["normal"]["per_hour"] is not None else f"{a['events_today']:,} events (replay shorter than the baseline) · ")
+                  + f"{a['maintenance_filtered']} approved-maintenance events set aside · {a['alerts']} alert(s)"
                   + (f" → {', '.join(a['incidents'])}" if a["incidents"] else "")]
             L += [f"- {h}" for h in a["highlights"]]
             if a["silent_sources"]:

@@ -1,0 +1,49 @@
+# Management plane (KA-SAT-inspired) and service availability (DDoS) rules.
+rules:
+  - id: MGMT-001
+    type: sequence
+    short: admin sign-in from an unfamiliar source, then an unscheduled privileged change
+    title: Remote admin sign-in from an unfamiliar source followed by an unscheduled privileged config change (same session)
+    attack: [T1133, T1078, T1072]
+    severity: 8
+    by: [session]
+    within_min: 15
+    steps:
+      - where: {type: auth, action: logon, outcome: success, unfamiliar_source: true}
+      - where: {type: config, action: privileged-config-change, scheduled: false}
+    text: "Session {session} on {host}: sign-in from an unfamiliar source, then an unscheduled privileged change at {last}"
+
+  - id: MGMT-002
+    type: sequence
+    short: service loss after the change
+    title: Service degraded after an unscheduled privileged change in the same session
+    attack: [T1489]
+    severity: 9
+    by: [session]
+    within_min: 60
+    steps:
+      - where: {type: config, action: privileged-config-change, scheduled: false}
+      - where: {type: service, action: service-degraded}
+    text: "Session {session}: unscheduled change, then service degraded on {host} at {last}: {detail}"
+
+  - id: SVC-001
+    type: match
+    short: service degrading under a traffic surge
+    title: Requests, latency and server errors rising together (early warning of a flood / DDoS)
+    attack: [T1498, T1499.002]
+    severity: 7
+    group_by: [host, scenario]
+    window_min: 10
+    where: {type: service, action: health-sample, rps_ratio|gte: 3, p95_ratio|gte: 5, error_pct|gte: 2}
+    text: "{host} ({scenario}) from {first}: traffic x{rps_ratio}, p95 latency x{p95_ratio}, {error_pct}% server errors while checks still pass"
+
+  - id: SVC-002
+    type: match
+    short: service unavailable
+    title: Availability check failed
+    attack: [T1499.002]
+    severity: 8
+    group_by: [host, scenario]
+    window_min: 10
+    where: {type: service, action: health-sample, availability: fail}
+    text: "{host} ({scenario}) failed its availability check at {first}: {detail}"

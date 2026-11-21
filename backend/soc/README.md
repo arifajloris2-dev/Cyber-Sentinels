@@ -62,6 +62,8 @@ raised, the incidents those fed, silent sources, and plain-language highlights.
 | Perimeter firewall | pfSense filterlog | inbound passed/blocked, most targeted, inbound to non-public ports |
 | Network sensor (Zeek) | conn.log | flows, to the internet, failed, largest upload |
 | Mail | gateway log, mail events | delivered/quarantined, risky attachments, clicks |
+| Management plane | management-gateway sign-ins and config changes (`management_events`) | sign-ins from unfamiliar sources, unscheduled privileged changes, service loss |
+| Service health | public-service health samples (`portal_health`) | traffic, latency and errors vs the first sample, failed availability checks |
 
 **Add a system:** add one file `soc/agents/<name>.py` with `AGENT = Agent(name, title, watches, {parser: function}, highlights)`
 (the parse function can live in the same file) and, if needed, a rules file in `soc/rules/`. Nothing else changes.
@@ -120,6 +122,10 @@ See `soc/collect/README.md` for the one-time setup on each machine.
 | IMP-001 | Shadow copies or backups deleted (ransomware preparation) | T1490 |
 | IMP-002 | 50+ files rewritten with an encrypted extension by one process in 5 min | T1486 |
 | EXF-001 | Internal machine uploaded 50 MB+ to an internet address in one connection | T1048 |
+| MGMT-001 | Admin sign-in from an unfamiliar source, then an unscheduled privileged change (same session) | T1133, T1078, T1072 |
+| MGMT-002 | Service degraded after an unscheduled privileged change | T1489 |
+| SVC-001 | Traffic, latency and server errors rising together while checks still pass (DDoS early warning) | T1498, T1499.002 |
+| SVC-002 | Availability check failed | T1499.002 |
 | SYS-001 | New service installed (Windows) | T1543.003 |
 | SYS-002 | Service started that never ran before (Ubuntu) | T1543.002 |
 | SYS-003 | Firewall rule or setting changed | T1562.004 |
@@ -145,7 +151,8 @@ window), `distinct_threshold` (N unique values for one target), `sequence` (step
 
 Start from the files in `soc/sample_logs/` (2 machines). For a full base (50 devices, 2 days, 4 attacks, maintenance, a
 silent log source, answer key) run `python backend/soc/fleet/make_fleet.py`: see [`fleet/README.md`](fleet/README.md). Real logs from the team's lab VMs
-(anonymised) are in [`lab_logs/`](lab_logs/README.md). Later the machine list can come from `backend/data/assets.json` (Member 1).
+(anonymised) are in [`lab_logs/`](lab_logs/README.md); the team's KA-SAT-inspired and Kosovo DDoS replays are in
+[`scenarios/`](scenarios/README.md). Later the machine list can come from `backend/data/assets.json` (Member 1).
 
 ## Output for the rest of the project
 

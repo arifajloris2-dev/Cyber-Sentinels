@@ -36,6 +36,10 @@ TECHNIQUES = {
     "T1490": ("Inhibit System Recovery", "Impact"),
     "T1486": ("Data Encrypted for Impact", "Impact"),
     "T1048": ("Exfiltration Over Alternative Protocol", "Exfiltration"),
+    "T1133": ("External Remote Services", "Initial Access"),
+    "T1072": ("Software Deployment Tools", "Execution"),
+    "T1489": ("Service Stop", "Impact"),
+    "T1499.002": ("Endpoint Denial of Service: Service Exhaustion Flood", "Impact"),
 }
 
 # stage of the attack, used to tell the incident as a chain:

@@ -1,0 +1,110 @@
+{
+  "title": "Kosovo government services disruption replay",
+  "synthetic": true,
+  "historical_reference": {
+    "date": "September 2022",
+    "summary": "CERT-EU reported DDoS attacks against government systems in Kosovo, with intermittent internet disruptions and occasional loss of access to government services.",
+    "source": "https://cert.europa.eu/publications/threat-intelligence/cb22-10/"
+  },
+  "scenario_notes": "The portal, metrics and timings are fictional. Events are aggregate observations for offline replay.",
+  "service": "demo-government-portal",
+  "scenarios": [
+    {
+      "id": "simulated-disruption",
+      "events": [
+        {
+          "offset_seconds": 0,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 110,
+          "p95_response_ms": 160,
+          "http_5xx_percent": 0.2,
+          "availability_check": "pass"
+        },
+        {
+          "offset_seconds": 30,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 680,
+          "p95_response_ms": 310,
+          "http_5xx_percent": 0.4,
+          "availability_check": "pass"
+        },
+        {
+          "offset_seconds": 60,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 910,
+          "p95_response_ms": 1250,
+          "http_5xx_percent": 3.8,
+          "availability_check": "pass"
+        },
+        {
+          "offset_seconds": 90,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 1080,
+          "p95_response_ms": 2600,
+          "http_5xx_percent": 12.4,
+          "availability_check": "pass"
+        },
+        {
+          "offset_seconds": 120,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 1050,
+          "p95_response_ms": 4800,
+          "http_5xx_percent": 41,
+          "availability_check": "fail"
+        }
+      ]
+    },
+    {
+      "id": "healthy-busy-period",
+      "events": [
+        {
+          "offset_seconds": 0,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 110,
+          "p95_response_ms": 160,
+          "http_5xx_percent": 0.2,
+          "availability_check": "pass"
+        },
+        {
+          "offset_seconds": 30,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 680,
+          "p95_response_ms": 180,
+          "http_5xx_percent": 0.2,
+          "availability_check": "pass"
+        },
+        {
+          "offset_seconds": 60,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 910,
+          "p95_response_ms": 190,
+          "http_5xx_percent": 0.3,
+          "availability_check": "pass"
+        },
+        {
+          "offset_seconds": 90,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 1080,
+          "p95_response_ms": 210,
+          "http_5xx_percent": 0.3,
+          "availability_check": "pass"
+        },
+        {
+          "offset_seconds": 120,
+          "event_type": "portal_health_sample",
+          "requests_per_second": 1050,
+          "p95_response_ms": 200,
+          "http_5xx_percent": 0.2,
+          "availability_check": "pass"
+        }
+      ]
+    }
+  ],
+  "evaluation": {
+    "replay": "Run each scenario independently and reveal events in offset order.",
+    "expected_disruption": "Raise a warning before the first failed availability check. Explain the simultaneous rise in request volume, latency and server errors.",
+    "expected_control": "Raise no service degradation alert during the healthy busy period.",
+    "lead_time": "Subtract the first SOC alert offset from the first failed availability check offset. Record AI explanation latency separately.",
+    "first_simulated_failed_check_offset_seconds": 120
+  }
+}

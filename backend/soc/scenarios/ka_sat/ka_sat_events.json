@@ -1,0 +1,32 @@
+[
+  {
+    "scenario": "ka-sat-inspired",
+    "synthetic": true,
+    "session_id": "demo-001",
+    "offset_seconds": 0,
+    "host": "demo-management-gateway",
+    "event": "remote_admin_login",
+    "detail": "Successful sign-in from an unfamiliar source",
+    "phase": "early_signal"
+  },
+  {
+    "scenario": "ka-sat-inspired",
+    "synthetic": true,
+    "session_id": "demo-001",
+    "offset_seconds": 45,
+    "host": "demo-management-gateway",
+    "event": "privileged_config_change",
+    "detail": "Unscheduled change recorded for the same synthetic session",
+    "phase": "early_signal"
+  },
+  {
+    "scenario": "ka-sat-inspired",
+    "synthetic": true,
+    "session_id": "demo-001",
+    "offset_seconds": 120,
+    "host": "demo-monitor",
+    "event": "service_health_degraded",
+    "detail": "Fictional monitoring alert for loss of service across multiple terminals",
+    "phase": "simulated_impact"
+  }
+]

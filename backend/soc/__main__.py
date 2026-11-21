@@ -37,6 +37,9 @@ def replay(folder: Path, step_min: int = 1) -> list[dict]:
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):   # Windows consoles/pipes default to cp1252, which cannot print "→"
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="python -m soc", description="SOC detection & correlation engine")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("sample", help="make sample logs in soc/sample_logs")

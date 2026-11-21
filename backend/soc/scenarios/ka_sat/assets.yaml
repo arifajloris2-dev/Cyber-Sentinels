@@ -1,0 +1,4 @@
+night_hours: [20, 6]
+assets:
+  - {host: demo-management-gateway, role: satellite network management gateway, criticality: 5}
+  - {host: demo-monitor, role: service monitoring for user terminals, criticality: 3}
