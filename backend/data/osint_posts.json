@@ -1,3 +1,21 @@
-{
-  "note": "Member 1: Postime OSINT te simuluara"
-}
+[
+  {
+    "post_id": "osint-001",
+    "source": "simulated_telegram_leak_channel",
+    "timestamp": "2026-11-21T01:55:00Z",
+    "leaked_accounts": ["svc_ops_night"],
+    "referenced_cves": ["CVE-2025-4120"],
+    "confidence": 0.88,
+    "summary": "Leaked credentials for svc_ops_night and notes targeting GateControlService v2.4.0."
+  },
+  {
+    "post_id": "osint-002",
+    "source": "simulated_public_forum",
+    "timestamp": "2026-11-21T02:02:00Z",
+    "leaked_accounts": ["external_unknown_user"],
+    "referenced_cves": ["CVE-2023-99999"],
+    "confidence": 0.40,
+    "summary": "Unrelated external chatter not matching base asset inventory (noise filtered out)."
+  }
+]
+
