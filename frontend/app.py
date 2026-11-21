@@ -180,6 +180,43 @@ def _short(text: Any, n: int = 140) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+# entity groups on the Entities page (machines are grouped by their role in the asset inventory)
+MACHINE_GROUPS = ["PCs", "Servers", "Firewalls", "Gate controllers"]
+
+
+def _machine_group(asset: dict) -> str:
+    role, os_name = str(asset.get("role", "")).lower(), str(asset.get("os", "")).lower()
+    if "firewall" in role or "vpn" in role or os_name == "network":
+        return "Firewalls"
+    if os_name == "embedded" or role.startswith("gate controller"):
+        return "Gate controllers"
+    if "workstation" in role or str(asset.get("host", "")).upper().startswith("WS-"):
+        return "PCs"
+    return "Servers"
+
+
+ENTITY_TABS = [("All", "apps"), ("Users", "person"), ("PCs", "computer"), ("Servers", "dns"),
+               ("Firewalls", "security"), ("Gate controllers", "sensor_door")]
+GROUP_ICON = {"PCs": "computer", "Servers": "dns", "Firewalls": "security", "Gate controllers": "sensor_door"}
+RISK_ORDER = {"High": 3, "Medium": 2, "Low": 1, "None": 0}
+ENTITY_NAME_SLOT = """<q-td :props="props"><div class="row items-center no-wrap" style="gap:10px">
+  <q-avatar size="30px" style="background:#eef2f7;color:#4d5f74"><q-icon :name="props.row.icon" size="17px"/></q-avatar>
+  <div style="line-height:1.25"><div style="font-weight:600">{{ props.row.name }}</div>
+  <div style="font-size:11px;color:#66778b">{{ props.row.sub }}</div></div></div></q-td>"""
+ENTITY_RISK_SLOT = """<q-td :props="props"><span class="soc-pill" :style="props.row.risk === 'High' ? 'background:#fdecef;color:#c2364f'
+  : props.row.risk === 'Medium' ? 'background:#fff3df;color:#c27400' : props.row.risk === 'Low' ? 'background:#eaf1fc;color:#3473d1'
+  : 'background:#eef2f7;color:#66778b'"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;
+  background:currentColor"></span>{{ props.row.risk }}</span></q-td>"""
+ENTITY_CRIT_SLOT = """<q-td :props="props"><span v-if="props.row.crit" style="display:inline-flex;gap:3px;align-items:center">
+  <span v-for="i in 5" :key="i" :style="'width:9px;height:9px;border-radius:2px;background:' + (i <= props.row.crit ? '#3473d1' : '#dce4ed')"></span>
+  <span style="margin-left:6px;font-size:11px;color:#66778b">{{ props.row.crit }}/5</span></span></q-td>"""
+ENTITY_ZONE_SLOT = """<q-td :props="props"><span v-if="props.row.zone" class="soc-pill"
+  style="background:#f1f4f8;color:#4d5f74;border:1px solid #dce4ed">{{ props.row.zone }}</span></q-td>"""
+ENTITY_PRIV_SLOT = """<q-td :props="props"><span v-if="props.row.privileged" class="soc-pill" style="background:#fdecef;color:#c2364f">Privileged</span>
+  <span v-else style="font-size:12px;color:#66778b">Standard</span></q-td>"""
+ENTITY_TYPE_SLOT = """<q-td :props="props"><span style="font-size:12px">{{ props.row.type === 'Users' ? 'User' : props.row.type.replace(/s$/, '') }}</span></q-td>"""
+
+
 # Cyber Sentinels logo: a shield with its left half filled (also used as the browser-tab icon)
 LOGO_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="{size}" height="{size}" '
             'style="display:block"><path d="M32 4 L56 12 V30 C56 45 46 55 32 60 C18 55 8 45 8 30 V12 Z" fill="none" '
@@ -393,8 +430,8 @@ class DashboardPage:
                         self.incident_badges = ui.row().classes("gap-2 items-center")
                     with ui.column().classes("items-end gap-2"):
                         self.priority_badge = ui.badge("—", color=None).style(f"background:#eaf1fc;color:{COLORS['blue']}")
-                        self.close_button = ui.button("Close incident", icon="task_alt",
-                                                      on_click=self._ask_close_incident).props("outline dense no-caps color=grey-8")
+                        self.close_button = ui.button("Close incident", icon="task_alt", color=None,
+                                                      on_click=self._ask_close_incident).props("unelevated dense no-caps padding=\"4px 12px\"").style("background:#e8f5ed;color:#23774d;border:1px solid #a7d7b8;white-space:nowrap")
                 self.attack_path = ui.row().classes("w-full items-center flex-wrap gap-1 mt-3")
                 with ui.tabs().props("dense no-caps inline-label align=left").classes("mt-3") as dtabs:
                     ui.tab("story", "Story & path", icon="account_tree")
@@ -473,14 +510,21 @@ class DashboardPage:
 
     # ---------------------------------------------------------------- entities
     def _build_entities(self) -> None:
-        with ui.element("div").classes("soc-card p-4 w-full"):
-            with ui.row().classes("w-full items-center gap-3"):
-                ui.label("ENTITY").classes("soc-title")
-                self.entity_select = ui.select([], with_input=True, label="Host or account",
-                                               on_change=lambda e: self.show_entity(e.value)).props(
-                    "outlined dense").classes("w-96")
-                ui.label("Pick a machine or an account to see everything about it.").classes("text-xs").style(
-                    f"color:{COLORS['muted']}")
+        self.entity_kind = "All"
+        self.entity_rows: list[dict] = []
+        self.entity_open: str | None = None
+        self.entity_query = ""
+        self.entity_tab_el: dict[str, Any] = {}
+        with ui.element("div").classes("soc-card w-full").style("padding:2px 12px 0 12px"):
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                with ui.tabs(value="All", on_change=lambda e: self._set_entity_kind(e.value)).props(
+                        "dense no-caps inline-label align=left active-color=primary indicator-color=primary") as self.entity_tabs:
+                    for name, icon in ENTITY_TABS:
+                        self.entity_tab_el[name] = ui.tab(name, name, icon=icon).classes("px-3")
+                self.entity_back = ui.button("Back to inventory", icon="arrow_back",
+                                             on_click=lambda: self.show_entity(None)).props("flat dense no-caps")
+                self.entity_back.set_visibility(False)
+        self.entity_list = ui.column().classes("w-full gap-4")
         self.entity_box = ui.column().classes("w-full gap-4")
 
     # ---------------------------------------------------------------- agents
@@ -1129,7 +1173,8 @@ class DashboardPage:
         self.priority_badge.style(f"background-color:{bg} !important;color:{fg} !important")
         self.close_button.set_text("Reopen incident" if closed else "Close incident")
         self.close_button.props(f"icon={'undo' if closed else 'task_alt'}")
-        self.close_button.style(f"background:{COLORS['muted'] if closed else COLORS['green']};color:white")
+        self.close_button.style("background:#f1f4f8;color:#4d5f74;border:1px solid #d5dde7;white-space:nowrap" if closed else
+                                "background:#e8f5ed;color:#23774d;border:1px solid #a7d7b8;white-space:nowrap")
         self.incident_badges.clear()
         with self.incident_badges:
             self._verdict_badge(incident, chip=True)
@@ -1548,21 +1593,147 @@ class DashboardPage:
 
     # ---------------------------------------------------------------- entities
     def _render_entity_options(self) -> None:
+        """Build one inventory row per user and machine: type, risk, criticality, zone, activity, last seen."""
         s = self.snapshot
         if s is None:
             return
-        hosts = sorted({a.get("host") for a in s.assets.get("assets", []) if a.get("host")}
-                       | {e.get("host") for e in s.events[:0]})
-        users = sorted({u.get("user") for u in s.assets.get("users", []) if u.get("user")}
-                       | {u for inc in self.incidents for u in inc.get("users", [])})
-        opts = {f"host:{h}": f"🖥 {h}" for h in hosts}
-        opts.update({f"user:{u}": f"👤 {u}" for u in users})
-        self.entity_select.set_options(opts)
+        users_info = {u.get("user"): u for u in s.assets.get("users", []) if u.get("user")}
+        users = sorted(set(users_info) | {u for inc in self.incidents for u in inc.get("users", [])})
+        ev_host, ev_user, seen_host, seen_user = Counter(), Counter(), {}, {}
+        for e in s.events:                                   # one pass: activity and last seen
+            t = str(e.get("time") or "")
+            for h in {e.get("host"), e.get("src_host"), e.get("dst_host")} - {None, ""}:
+                k = str(h).lower()
+                ev_host[k] += 1
+                if t > seen_host.get(k, ""):
+                    seen_host[k] = t
+            if e.get("user"):
+                k = str(e["user"]).lower()
+                ev_user[k] += 1
+                if t > seen_user.get(k, ""):
+                    seen_user[k] = t
+        al_host = Counter(h for a in s.alerts for h in set(a.get("hosts", [])))
+        al_user = Counter(u for a in s.alerts for u in set(a.get("users", [])))
+        inc_host: dict[str, list[str]] = {}
+        inc_user: dict[str, list[str]] = {}
+        for i in self.incidents:
+            for h in {x.get("host") for x in i.get("hosts", [])}:
+                inc_host.setdefault(h, []).append(i.get("priority", "P3"))
+            for u in set(i.get("users", [])):
+                inc_user.setdefault(u, []).append(i.get("priority", "P3"))
+        zones = s.assets.get("zones", [])
+
+        def risk(prios: list[str], alerts: int) -> str:
+            if "P1" in prios:
+                return "High"
+            if prios or alerts >= 3:
+                return "Medium"
+            return "Low" if alerts else "None"
+
+        rows = []
+        for u in users:
+            i = users_info.get(u, {})
+            role = str(i.get("role") or "not in inventory")
+            icon = "admin_panel_settings" if i.get("privileged") else "settings_suggest" if "service" in role else "person"
+            rk = risk(inc_user.get(u, []), al_user[u])
+            rows.append({"key": f"user:{u}", "name": u, "type": "Users", "icon": icon, "sub": role,
+                         "groups": ", ".join(i.get("groups", []) or []), "privileged": bool(i.get("privileged")),
+                         "home": i.get("home", ""), "ip": "", "os": "", "zone": "", "crit": 0,
+                         "risk": rk, "risk_n": RISK_ORDER[rk], "alerts": al_user[u], "incidents": len(inc_user.get(u, [])),
+                         "events": ev_user[u.lower()], "last": _when(seen_user.get(u.lower()), "%m-%d %H:%M") if seen_user.get(u.lower()) else ""})
+        for a in s.assets.get("assets", []):
+            h = a.get("host")
+            if not h:
+                continue
+            g = _machine_group(a)
+            rk = risk(inc_host.get(h, []), al_host[h])
+            zone = next((z["name"] for z in zones if a.get("ip") and self._in_cidr(a["ip"], z.get("cidr"))), "")
+            rows.append({"key": f"host:{h}", "name": h, "type": g, "icon": GROUP_ICON[g], "sub": a.get("role", ""),
+                         "groups": "", "privileged": False, "home": "", "ip": a.get("ip", ""), "os": a.get("os", ""),
+                         "zone": zone, "crit": int(a.get("criticality") or 0),
+                         "risk": rk, "risk_n": RISK_ORDER[rk], "alerts": al_host[h], "incidents": len(inc_host.get(h, [])),
+                         "events": ev_host[h.lower()], "last": _when(seen_host.get(h.lower()), "%m-%d %H:%M") if seen_host.get(h.lower()) else ""})
+        rows.sort(key=lambda r: (-r["risk_n"], -r["incidents"], -r["alerts"], r["name"].lower()))
+        self.entity_rows = rows
+        counts = Counter(r["type"] for r in rows)
+        for name, el in self.entity_tab_el.items():
+            el._props["label"] = f"{name}  {len(rows) if name == 'All' else counts.get(name, 0)}"
+            el.update()
+        if not self.entity_open:
+            self._render_entity_list()
+
+    def _set_entity_kind(self, kind: str) -> None:
+        self.entity_kind = kind
+        self.entity_query = ""
+        self.show_entity(None)
+
+    def _render_entity_list(self) -> None:
+        """Inventory view for the selected tab: summary tiles, then one table (click a row for the details)."""
+        self.entity_list.clear()
+        if self.snapshot is None:
+            return
+        kind = self.entity_kind
+        rows = [r for r in self.entity_rows if kind == "All" or r["type"] == kind]
+        tiles = [("TOTAL", len(rows), COLORS["ink"]),
+                 ("HIGH RISK", sum(r["risk"] == "High" for r in rows), COLORS["red"]),
+                 ("MEDIUM RISK", sum(r["risk"] == "Medium" for r in rows), COLORS["amber"])]
+        if kind == "Users":
+            tiles.append(("PRIVILEGED", sum(r["privileged"] for r in rows), COLORS["violet"]))
+        elif kind == "All":
+            tiles.append(("IN INCIDENTS", sum(r["incidents"] > 0 for r in rows), COLORS["blue"]))
+        else:
+            tiles.append(("CRITICAL (4-5)", sum(r["crit"] >= 4 for r in rows), COLORS["blue"]))
+
+        col = lambda name, label, align="left", sort=True: {"name": name, "label": label, "field": name,  # noqa: E731
+                                                             "align": align, "sortable": sort}
+        cols = [col("name", "NAME")]
+        if kind == "All":
+            cols += [col("type", "TYPE"), col("risk", "RISK LEVEL"), col("crit", "CRITICALITY"), col("zone", "ZONE")]
+        elif kind == "Users":
+            cols += [col("risk", "RISK LEVEL"), col("privileged", "ACCESS"), col("groups", "GROUPS", sort=False),
+                     col("home", "HOME MACHINE")]
+        else:
+            cols += [col("risk", "RISK LEVEL"), col("crit", "CRITICALITY"), col("ip", "IP"), col("os", "OS"), col("zone", "ZONE")]
+        cols += [col("alerts", "ALERTS", "right"), col("incidents", "INCIDENTS", "right"), col("last", "LAST SEEN")]
+        cols[cols.index(next(c for c in cols if c["name"] == "risk"))]["field"] = "risk_n"   # sort by severity
+
+        with self.entity_list:
+            with ui.element("div").classes("w-full").style("display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px"):
+                for label, value, color in tiles:
+                    with ui.element("div").classes("soc-card soc-kpi"):
+                        ui.label(label).classes("k")
+                        ui.label(f"{value:,}").classes("v").style(f"color:{color}")
+            with ui.element("div").classes("soc-card p-4 w-full"):
+                with ui.row().classes("w-full items-center justify-between"):
+                    ui.label(f"{'ALL ENTITIES' if kind == 'All' else kind.upper() if kind != 'PCs' else 'PCs'} · sorted by risk").classes("soc-title")
+                    search = ui.input(placeholder="Search name, IP, role, group...").props(
+                        "outlined dense clearable").classes("w-80")
+                    search.props('prepend-icon=search')
+                table = ui.table(columns=cols, rows=rows, row_key="key", pagination={"rowsPerPage": 20}).classes(
+                    "w-full soc-table mt-2").props("flat dense")
+                table.add_slot("body-cell-name", ENTITY_NAME_SLOT)
+                table.add_slot("body-cell-risk", ENTITY_RISK_SLOT)
+                table.add_slot("body-cell-crit", ENTITY_CRIT_SLOT)
+                table.add_slot("body-cell-zone", ENTITY_ZONE_SLOT)
+                table.add_slot("body-cell-privileged", ENTITY_PRIV_SLOT)
+                table.add_slot("body-cell-type", ENTITY_TYPE_SLOT)
+                table.on("rowClick", lambda e: self.show_entity((e.args[1] or {}).get("key")) if isinstance(e.args, list) and len(e.args) > 1 else None)
+
+                def apply_filter(value: Any) -> None:
+                    q = str(value or "").strip().lower()
+                    table.rows = [r for r in rows if not q or q in " ".join(str(r.get(k, "")) for k in
+                                                                         ("name", "sub", "ip", "os", "zone", "groups", "home", "type")).lower()]
+                    table.update()
+                search.on_value_change(lambda e: apply_filter(e.value))
 
     def show_entity(self, key: str | None) -> None:
         s = self.snapshot
         self.entity_box.clear()
+        self.entity_open = key or None
+        self.entity_back.set_visibility(bool(key))
+        self.entity_list.set_visibility(not key)
         if not key or s is None:
+            self._render_entity_list()
             return
         kind, name = key.split(":", 1)
         low = name.lower()
