@@ -185,6 +185,11 @@ attack (ATT&CK techniques), alerts (each with its raw evidence lines), links (wh
 
 Every incident and single alert also has `verification` (see the next section).
 
+Single alerts that did not become an incident (`singles`) are listed by the dashboard as **P3** ("review when time
+allows") through `correlate.low_priority(singles, assets)`: same fields as an incident, `kind: "single"`, id `LOW-...`.
+On the 50-device base these are the mistyped password (AUTH-001), the helpdesk group change (PRIV-004, severity 3) and
+the quarantined malware mail campaign (MAIL-003, severity 3). They never count as incidents.
+
 ## Verification (`soc/verify.py`)
 
 A deterministic second opinion on what the engine found. It does not detect; it judges, explains, keeps an audit

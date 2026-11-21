@@ -592,7 +592,7 @@ class DashboardPage:
             with ui.element("div").classes("soc-grid-3 w-full"):
                 with self._card("ABNORMAL BUT HARMLESS  ·  look-alikes"):
                     for x in view["lookalikes"]:
-                        self._scenario_row(x["id"], x["text"], x["incidents"], muted)
+                        self._scenario_row(x["id"], x["text"], x["incidents"], muted, x.get("low"))
                 with self._card("NORMAL ROUTINE  ·  every day"):
                     ui.label("Day 1 (21 Nov) is normal operations only: the engine learns what is usual from it. "
                              "These routines run on both days.").classes("text-xs mt-1").style(f"color:{muted}")
@@ -648,7 +648,7 @@ class DashboardPage:
                     ui.label(text).classes("text-xs soc-explanation-text").style(f"color:{ink}")
 
     @staticmethod
-    def _scenario_row(name: str, text: str, incidents: list[str], muted: str) -> None:
+    def _scenario_row(name: str, text: str, incidents: list[str], muted: str, low: list[str] | None = None) -> None:
         with ui.row().classes("w-full items-start no-wrap gap-2 py-2").style("border-bottom:1px solid #eef2f6"):
             ok = not incidents
             ui.icon("check_circle" if ok else "error").style(
@@ -656,7 +656,8 @@ class DashboardPage:
             with ui.column().classes("gap-0 grow").style("min-width:0"):
                 ui.label(name).classes("text-sm font-bold")
                 ui.label(text.replace(" -> ", " → ")).classes("text-xs soc-explanation-text").style(f"color:{muted}")
-                ui.label("not escalated" if ok else "raised as " + ", ".join(incidents)).classes("text-xs").style(
+                ui.label(("not escalated" + (f" · listed for review as P3 ({', '.join(low)})" if low else ""))
+                         if ok else "raised as " + ", ".join(incidents)).classes("text-xs").style(
                     f"color:{COLORS['green'] if ok else COLORS['amber']}")
 
     # ---------------------------------------------------------------- knowledge import (text only)

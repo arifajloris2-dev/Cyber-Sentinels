@@ -42,9 +42,9 @@
     {
       "name": "Helpdesk changes membership of a normal group",
       "role": "helpdesk",
-      "hosts": ["*"],
-      "rules_expected": ["PRIV-003"],
-      "why": "Helpdesk may add colleagues to non-privileged groups; a privileged group (PRIV-001) is never covered."
+      "host_roles": ["domain controller", "domain controller + Kerberos auth server"],
+      "rules_expected": ["PRIV-004"],
+      "why": "Helpdesk may add colleagues to non-privileged groups on the directory servers; a privileged group (PRIV-001) is never covered."
     }
   ]
 }

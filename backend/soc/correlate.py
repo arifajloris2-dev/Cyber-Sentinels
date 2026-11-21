@@ -258,3 +258,34 @@ def _advice(members, hosts):
             if step not in out:
                 out.append(step)
     return [{"type": t, "step": s} for t, s in out]
+
+
+def _cap(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def low_priority(singles: list[dict], assets: dict) -> list[dict]:
+    """Single alerts that did not become an incident, shaped like incidents so the console can list them as P3.
+
+    They stay out of `incidents` (one weak signal alone is not an incident) but the operator should still see them:
+    review when time allows. Same fields as an incident; `kind` = "single" tells them apart.
+    """
+    known = {x["host"].lower(): x for x in assets.get("assets", [])}
+    out = []
+    for a in sorted(singles, key=lambda x: x["time"]):
+        stage = min((info(t)["stage"] for t in a["attack"]), key=STAGES.index) if a.get("attack") else "impact"
+        hosts = [h for h in a["hosts"] if h.lower() in known]
+        out.append({
+            "kind": "single", "id": f"LOW-{a['time']:%Y%m%d-%H%M}-{a['rule']}", "priority": "P3", "score": a["severity"],
+            "title": _cap(f"{a.get('short') or a['title']} on {', '.join(hosts or a['hosts'][:2]) or 'an unknown machine'}"),
+            "start": a["time"], "end": a["time_end"], "stages": [stage], "confidence": None,
+            "confidence_reasons": ["single alert: nothing else was linked to it, so it was not escalated"],
+            "hosts": [{"host": h, "role": known[h.lower()].get("role"), "criticality": known[h.lower()].get("criticality")}
+                      for h in hosts],
+            "users": sorted(a["users"]), "unknown_ips": sorted(a["unknown_ips"]),
+            "attack": [info(t) for t in a["attack"]], "alerts": [{**a, "stage": stage}],
+            "links": [], "why_together": ["single alert: no other alert shares its account, address or connection"],
+            "next_checks": _advice([a], hosts), "story": a["text"], "path": [], "escalation": [],
+            "compromised_accounts": [], "intel": [], "verification": a.get("verification"),
+        })
+    return out

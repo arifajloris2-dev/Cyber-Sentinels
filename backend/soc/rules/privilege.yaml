@@ -39,3 +39,12 @@ rules:
     night_bonus: 1
     where: {type: auth, action: logon, outcome: success, user_service: true, logon: [remote, ssh, local, unlock]}
     text: "Service account {user} logged on to {host} interactively ({logon}) from {src_ip} at {first}: service accounts should not do that"
+
+  - id: PRIV-004
+    type: match
+    short: member added to a normal group
+    title: Account added to a normal (non-privileged) group
+    attack: [T1098]
+    severity: 3
+    where: {type: config, action: group-member-added, privileged_group|not: [true]}
+    text: "{member} was added to group '{group}' on {host} by {user} at {first}"

@@ -43,7 +43,13 @@ def build(truth: dict | None, incidents: list[dict]) -> dict | None:
     """Compare the answer key with the incidents. None when this log folder has no answer key."""
     if not truth:
         return None
-    ev = [(inc, _evidence_ids(inc)) for inc in incidents]
+    # P3 items (single alerts, kind == "single") are listed for review but not escalated: they never count as raised
+    ev = [(inc, _evidence_ids(inc)) for inc in incidents if inc.get("kind") != "single"]
+    low = [(inc, _evidence_ids(inc)) for inc in incidents if inc.get("kind") == "single"]
+
+    def listed_low(key: str) -> list[str]:
+        lines = _lines(truth, key)
+        return [str(i.get("id")) for i, ids in low if lines and ids & lines]
 
     def raised_by(key: str) -> list[dict]:
         lines = _lines(truth, key)
@@ -64,7 +70,7 @@ def build(truth: dict | None, incidents: list[dict]) -> dict | None:
     for key, text in (truth.get("lookalikes") or {}).items():
         hits = raised_by(key)
         item = {"id": key, "text": str(text), "lines": len(_lines(truth, key)),
-                "incidents": [str(i.get("id")) for i in hits]}
+                "incidents": [str(i.get("id")) for i in hits], "low": listed_low(key)}
         (routine if key in ROUTINE else lookalikes).append(item)
     maintenance = [{"key": k, "ticket": str(t), "lines": len(_lines(truth, k)),
                     "incidents": [str(i.get("id")) for i in raised_by(k)]}

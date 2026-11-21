@@ -38,3 +38,10 @@ def test_no_answer_key_means_no_exercise_view(tmp_path):
     assert scenario.load_truth(tmp_path) is None
     (tmp_path / "truth.json").write_text(json.dumps(TRUTH), encoding="utf-8")
     assert scenario.load_truth(tmp_path)["attacks"]["A1"]["hosts"] == ["WS-1"]
+
+
+def test_p3_single_alerts_are_listed_but_never_count_as_raised():
+    low = {"id": "LOW-1", "kind": "single", "priority": "P3", "alerts": [{"evidence": [{"id": "fs-events:7"}]}]}
+    view = scenario.build(TRUTH, [low])
+    b1 = view["lookalikes"][0]
+    assert b1["incidents"] == [] and b1["low"] == ["LOW-1"] and view["false_alarms"] == 0

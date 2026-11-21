@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from typing import Protocol
 
+from backend.soc.correlate import low_priority
 from backend.soc.pipeline import run
 from backend.osint_agent import run_osint_agent
 
@@ -47,7 +48,9 @@ class SocPipelineProvider:
         return DashboardSnapshot.from_mapping(
             {
                 "generated_at": datetime.now(timezone.utc),
-                "incidents": result.get("incidents", []),
+                # incidents (P1/P2) + single alerts that were not escalated, listed as P3 ("review when time allows")
+                "incidents": result.get("incidents", []) + low_priority(result.get("singles", []),
+                                                                        (result.get("cfg") or {}).get("assets", {})),
                 "sources": result.get("health", []),
                 "alerts": result.get("alerts", []),
                 "singles": result.get("singles", []),

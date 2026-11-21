@@ -206,14 +206,17 @@ def verify(item: dict, assets: dict | None, health: list[dict] | None, rules: di
 
     # 4. positive evidence of authorized activity
     authorized = []
-    unauthorized = []
-    for u in users:
-        bad = [h for h in hosts if not ctx.may_use(u, h, rules["shared_host_roles"])]
-        if u not in ctx.users:
-            unauthorized.append(f"{u} is not a known user")
-        elif bad:
-            unauthorized.append(f"{u} has no reason to use {', '.join(bad)}")
+    unauthorized = [f"{u} is not a known user" for u in users if u not in ctx.users]
     activity = _matching_activity(rules, ctx, users, hosts, rule_ids, alerts) if users and not unauthorized else None
+    # an activity that names machines (hosts / host_roles) authorizes its users on exactly those machines
+    granted = {h for h in hosts if activity and (h in (activity.get("hosts") or []) or
+                                                 (ctx.machines.get(h) or {}).get("role") in (activity.get("host_roles") or []))}
+    for u in users:
+        bad = [h for h in hosts if h not in granted and not ctx.may_use(u, h, rules["shared_host_roles"])]
+        if u in ctx.users and bad:
+            unauthorized.append(f"{u} has no reason to use {', '.join(bad)}")
+    if unauthorized:
+        activity = None
     if activity:
         authorized.append(_reason("V-AUTHORIZED", f"matches authorized activity '{activity['name']}': "
                                   f"{activity.get('why', '')}".rstrip(": "), evidence))
@@ -256,6 +259,8 @@ def _matching_activity(rules: dict, ctx: _Context, users: list[str], hosts: list
         if act.get("hosts") and "*" not in act["hosts"] and any(h not in act["hosts"] for h in hosts):
             continue
         if act.get("zones") and any(ctx.zone(h) not in act["zones"] for h in hosts):
+            continue
+        if act.get("host_roles") and any((ctx.machines.get(h) or {}).get("role") not in act["host_roles"] for h in hosts):
             continue
         rng = act.get("hours")
         if rng and not all(rng[0] <= h < rng[1] for h in hours):

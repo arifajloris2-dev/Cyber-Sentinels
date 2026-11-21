@@ -272,3 +272,26 @@ def test_verifier_only_writes_its_audit_file():
     assert all(any(isinstance(a, ast.Constant) and a.value in ("a", None) for a in n.args) or not n.args for n in opens)
     calls = {getattr(n.func, "attr", getattr(n.func, "id", "")) for n in ast.walk(tree) if isinstance(n, ast.Call)}
     assert not calls & {"write_text", "write_bytes", "unlink", "rmtree", "rename", "replace_file", "system", "popen"}
+
+
+def test_low_priority_items_are_shaped_like_incidents(fleet):
+    from soc.correlate import low_priority
+    truth, r = fleet
+    items = low_priority(r["singles"], r["cfg"]["assets"])
+    assert {i["alerts"][0]["rule"] for i in items} >= {"AUTH-001", "PRIV-004", "MAIL-003"}
+    for i in items:
+        assert i["priority"] == "P3" and i["kind"] == "single" and i["id"].startswith("LOW-")
+        assert i["verification"]["verdict"] != "suspicious" and i["title"][:1].isupper()
+    assert not {i["id"] for i in items} & {i["id"] for i in r["incidents"]}
+
+
+def test_helpdesk_may_change_normal_groups_on_the_directory_server_only():
+    assets = {**ASSETS, "users": ASSETS["users"] + [{"user": "k.zeqiri", "role": "helpdesk", "home": "WS-BASE-010"}],
+              "assets": ASSETS["assets"] + [{"host": "srv-auth-01", "ip": "10.24.1.10", "role": "domain controller + Kerberos auth server"}]}
+    rules = verify.load_rules()
+    ok = _single("PRIV-004", 3, user="k.zeqiri", hosts=("srv-auth-01",))
+    assert verify.verify(ok, assets, [], rules)["verdict"] == "likely_benign"
+    elsewhere = _single("PRIV-004", 3, user="k.zeqiri", hosts=("FS-01",))
+    assert verify.verify(elsewhere, assets, [], rules)["verdict"] == "inconclusive"
+    privileged = _single("PRIV-001", 9, user="k.zeqiri", hosts=("srv-auth-01",))
+    assert verify.verify(privileged, assets, [], rules)["verdict"] == "suspicious"

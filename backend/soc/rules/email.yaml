@@ -25,3 +25,15 @@ rules:
       - where: {type: email, action: delivered, verdict: [suspected_phishing, phishing, malicious, malware, suspicious]}
       - where: {type: email, action: url-clicked}
     text: "{user} clicked {url} at {last} in mail {message_id}, which the gateway flagged as phishing"
+
+  - id: MAIL-003
+    type: threshold
+    short: malware mail campaign stopped
+    title: Malware mail campaign quarantined by the gateway
+    attack: [T1566.001]
+    severity: 3
+    group_by: [sender]
+    window_min: 60
+    min_count: 5
+    where: {type: email, action: quarantined, verdict: malware}
+    text: "{count} malware mails from {sender} quarantined between {first} and {last}: nobody received them; check that no copy was released or forwarded"

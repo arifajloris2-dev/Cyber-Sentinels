@@ -119,8 +119,12 @@ def test_zone_policy_violation_is_part_of_the_night_chain(fleet):
 
 def test_admin_psexec_under_ticket_and_helpdesk_group_change_stay_quiet(fleet):
     truth, r = fleet
-    quiet = set(truth["lines"]["psexec-change"]) | set(truth["lines"]["B6"])
-    assert not {e["id"] for a in r["alerts"] for e in a["evidence"]} & quiet
+    alerted = {e["id"] for a in r["alerts"] for e in a["evidence"]}
+    assert not alerted & set(truth["lines"]["psexec-change"])          # under its ticket: no alert at all
+    # the helpdesk change is only listed for review (P3): one low-severity single alert, never part of an incident
+    b6 = [a for a in r["alerts"] if {e["id"] for e in a["evidence"]} & set(truth["lines"]["B6"])]
+    assert [a["rule"] for a in b6] == ["PRIV-004"] and b6[0]["severity"] <= 3
+    assert b6[0] in r["singles"] and b6[0]["verification"]["verdict"] == "likely_benign"
 
 
 def test_each_agent_reports_what_it_saw_on_the_50_device_base(fleet):
