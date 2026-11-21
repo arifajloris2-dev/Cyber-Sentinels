@@ -315,6 +315,10 @@ class DashboardPage:
                 self.model_badge = ui.badge("QWEN3 · CHECKING").style("background:#1b3249;color:#dce8f2")
                 self.refresh_button = ui.button("Refresh", icon="refresh", on_click=self.refresh).props(
                     "unelevated dense no-caps").style(f"background:{COLORS['blue']};color:white")
+                # kept for the code that updates them, but not shown: data loads by itself and
+                # knowledge imports/removals re-analyse automatically
+                for hidden in (self.data_badge, self.model_badge, self.refresh_button):
+                    hidden.set_visibility(False)
                 self.alerts_button = ui.button("Alerts 0", icon="notifications",
                                                on_click=lambda: self.nav.set_value("alerts")).props(
                     "outline dense no-caps").style("color:white")
@@ -762,9 +766,13 @@ class DashboardPage:
         self.qwen_results.clear()          # explanations are regenerated with the new knowledge
         await self.refresh()
 
-    def _kb_remove(self, name: str) -> None:
+    async def _kb_remove(self, name: str) -> None:
         if kb_store.remove(name):
-            ui.notify(f"Withdrew {name} (kept as .removed for the audit trail); press Refresh to re-analyse", type="info")
+            ui.notify(f"Withdrew {name} (kept as .removed for the audit trail); re-analysing the logs...", type="info")
+            self.qwen_results.clear()      # explanations are regenerated without the withdrawn knowledge
+            self._render_knowledge()
+            await self.refresh()
+            return
         self._render_knowledge()
 
     def _render_knowledge(self) -> None:
