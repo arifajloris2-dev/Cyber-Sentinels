@@ -11,6 +11,7 @@ A field that is missing never matches a positive condition.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -21,14 +22,29 @@ import yaml
 from .events import show
 
 SYSTEM_USERS = {"SYSTEM", "LocalSystem", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON", "root"}
+DEFAULT_INTERNAL = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+
+
+def _internal(ip: str, nets: list) -> bool | None:
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    return a.is_loopback or any(a in n for n in nets)
 
 
 # ======================================================================= context
 def enrich(events: list[dict], assets: dict) -> None:
-    """Add context fields the rules use. Never changes the original fields."""
+    """Add context fields the rules use. Never changes the original fields.
+
+    assets.yaml may also list  internal_nets: [cidr, ...]  (default: the private ranges) and
+    public_services: [{host, ports}]  - ports a server offers to the outside world on purpose (web portal 443, mail 25).
+    """
     by_ip = {a["ip"]: a for a in assets.get("assets", []) if a.get("ip")}
     by_host = {a["host"].lower(): a for a in assets.get("assets", [])}
     admin = set(assets.get("admin_ips", []))
+    nets = [ipaddress.ip_network(n) for n in assets.get("internal_nets", DEFAULT_INTERNAL)]
+    public = {(p["host"].lower(), int(port)) for p in assets.get("public_services", []) for port in p.get("ports", [])}
     night_from, night_to = assets.get("night_hours", [20, 6])
     for e in events:
         h = e["time"].hour
@@ -37,12 +53,19 @@ def enrich(events: list[dict], assets: dict) -> None:
             ip = e.get(f"{side}_ip")
             if ip:
                 e[f"{side}_known"] = ip in by_ip
+                e[f"{side}_internal"] = _internal(ip, nets)
                 if ip in by_ip:
                     e[f"{side}_host"] = by_ip[ip]["host"]
+                    e[f"{side}_role"] = by_ip[ip].get("role", "")
         e["admin_src"] = e.get("src_ip") in admin
         a = by_host.get(str(e.get("host", "")).lower(), {})
         e["criticality"] = a.get("criticality", 1)
+        e["role"] = a.get("role", "")
         e["system_user"] = e.get("user") in SYSTEM_USERS
+        if e.get("type") == "network":
+            # outside visitors on a port the server offers to the internet on purpose: normal, not "new" each time
+            target = str(e.get("dst_host") or e.get("host", "")).lower()
+            e["public_service"] = (e.get("src_internal") is False and (target, e.get("dst_port")) in public)
 
 
 def _cond(e: dict, key: str, want) -> bool:
@@ -100,9 +123,11 @@ def make_alert(rule: dict, evs: list[dict], extra: dict | None = None) -> dict:
     last = evs[-1]
     ctx = {**last, "count": len(evs), "first": f"{evs[0]['time']:%H:%M}", "last": f"{last['time']:%H:%M}", **(extra or {})}
     text = re.sub(r"\{(\w+)\}", lambda m: str(ctx.get(m.group(1), "?")), rule.get("text", rule["title"]))
-    hosts = {x for e in evs for x in (e.get("host"), e.get("src_host"), e.get("dst_host")) if x}
+    # a network sensor only watched the traffic: the machines involved are the two ends, not the sensor itself
+    hosts = {x for e in evs for x in ((None if e.get("sensor") else e.get("host")), e.get("src_host"), e.get("dst_host")) if x}
     return {
-        "id": f"{rule['id']}@{evs[0]['id']}", "rule": rule["id"], "title": rule["title"], "text": text,
+        "id": f"{rule['id']}@{evs[0]['id']}", "rule": rule["id"], "title": rule["title"], "short": rule.get("short", rule["title"]),
+        "text": text,
         "severity": rule["severity"] + (rule.get("night_bonus", 0) if any(e["night"] for e in evs) else 0),
         "attack": rule["attack"], "time": evs[0]["time"], "time_end": last["time"],
         "hosts": sorted(hosts), "users": sorted({e["user"] for e in evs if e.get("user") and not e["system_user"]}),

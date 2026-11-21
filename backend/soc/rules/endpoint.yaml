@@ -1,0 +1,48 @@
+# Endpoint activity from Sysmon (process created 1, network connection 3, file created 11) and Windows 4698.
+rules:
+  - id: PROC-001
+    type: match
+    short: Office document started a script
+    title: Office application started a script interpreter
+    attack: [T1204.002, T1059.001]
+    severity: 8
+    where:
+      type: process
+      action: process-start
+      parent|re: ["(?i)\\\\(winword|excel|powerpnt|outlook|onenote|mspub)\\.exe$"]
+      path|re: ["(?i)\\\\(powershell|pwsh|cmd|wscript|cscript|mshta|rundll32|regsvr32)\\.exe$"]
+    text: "{parent} started {path} on {host} as {user} at {first}: {detail}"
+
+  - id: PROC-002
+    type: match
+    short: hidden PowerShell
+    title: Encoded or hidden PowerShell command
+    attack: [T1059.001]
+    severity: 7
+    where:
+      type: process
+      action: process-start
+      path|re: ["(?i)\\\\(powershell|pwsh)\\.exe$"]
+      detail|re: ["(?i)\\s-(e|en|enc|enco|encod|encode|encoded|encodedcommand)\\s", "(?i)-w(indowstyle)?\\s+hidden"]
+    text: "PowerShell with an encoded/hidden command on {host} as {user} at {first}"
+
+  - id: PROC-003
+    type: match
+    short: scheduled task created
+    title: Scheduled task created by a user account
+    attack: [T1053.005]
+    severity: 6
+    where: {type: config, action: task-created, system_user: false}
+    text: "Scheduled task '{detail}' created on {host} by {user} at {first}"
+
+  - id: PROC-004
+    type: match
+    short: program dropped in user profile
+    title: Program file written into a user profile
+    attack: [T1105]
+    severity: 6
+    where:
+      type: file
+      action: file-created
+      path|re: ["(?i)\\\\Users\\\\[^\\\\]+\\\\AppData\\\\.*\\.(exe|dll|scr|ps1|bat|vbs|js|hta)$"]
+    text: "{detail} wrote {path} on {host} at {first}"

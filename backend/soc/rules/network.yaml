@@ -2,6 +2,7 @@
 rules:
   - id: NET-001
     type: new_value
+    short: lateral movement
     title: New outbound connection to an internal machine
     attack: [T1021]
     severity: 5
@@ -12,16 +13,20 @@ rules:
 
   - id: NET-002
     type: new_value
+    short: new inbound connection
     title: New inbound connection accepted
     attack: [T1021]
     severity: 4
     night_bonus: 1
     fields: [host, src_ip, dst_port]
-    where: {type: network, action: allow, direction: inbound}
+    # public_service: an outside visitor on a port listed in assets.yaml public_services (web 443, mail 25) is normal.
+    # Outside -> any OTHER port (e.g. SSH 22 on the web portal) still alerts.
+    where: {type: network, action: allow, direction: inbound, public_service: false}
     text: "{host} accepted a connection from {src_ip} ({src_host}) on port {dst_port}: never seen during the baseline"
 
   - id: NET-003
     type: threshold
+    short: blocked connection burst
     title: Many blocked connections from one address
     attack: [T1046]
     severity: 3
@@ -30,3 +35,37 @@ rules:
     min_count: 20
     where: {type: network, action: block}
     text: "{count} connections from {src_ip} blocked by {host} between {first} and {last}"
+
+  # ---- traffic to the internet and network-sensor flows (Sysmon/host firewall + Zeek conn.log)
+  - id: NET-004
+    type: new_value
+    short: direct internet connection
+    title: Workstation connected straight to the internet (not via the proxy)
+    attack: [T1071.001]
+    severity: 6
+    fields: [host, dst_ip]
+    where: {type: network, action: [allow, connect], direction: outbound, dst_internal: false, role|contains: workstation}
+    text: "{host} connected directly to {dst_ip} port {dst_port} at {first}: workstations normally use the proxy"
+
+  - id: NET-005
+    type: threshold
+    short: beaconing to the internet
+    title: Regular repeated connections from a workstation to one internet address
+    attack: [T1071.001, T1573]
+    severity: 7
+    group_by: [src_ip, dst_ip, dst_port]
+    window_min: 60
+    min_count: 6
+    where: {type: network, action: flow, src_internal: true, dst_internal: false, src_role|contains: workstation}
+    text: "{count} connections from {src_ip} ({src_host}) to {dst_ip}:{dst_port} between {first} and {last}"
+
+  - id: NET-006
+    type: new_value
+    short: new internal service port
+    title: Traffic to an internal service port never used before (network sensor)
+    attack: [T1571]
+    severity: 6
+    night_bonus: 1
+    fields: [dst_ip, dst_port]
+    where: {type: network, action: flow, outcome: success, src_internal: true, dst_internal: true}
+    text: "{src_ip} ({src_host}) -> {dst_ip} ({dst_host}) port {dst_port}: no traffic to this port during the baseline"

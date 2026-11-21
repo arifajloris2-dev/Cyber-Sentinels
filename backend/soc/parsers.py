@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .events import make_event, parse_time
@@ -37,7 +37,7 @@ WIN_EVENTS = {   # event id -> (type, action, outcome)
     4947: ("config", "firewall-change", "success"), 4948: ("config", "firewall-change", "success"),
     4950: ("config", "firewall-change", "success"), 4719: ("config", "audit-change", "success"),
     1102: ("config", "log-cleared", "success"), 4720: ("config", "account-created", "success"),
-    19: ("update", "update-installed", "success"),
+    19: ("update", "update-installed", "success"), 4698: ("config", "task-created", "success"),
 }
 
 
@@ -61,7 +61,7 @@ def parse_windows_events(path: Path, src: dict, stats: dict):
                                  src_ip=None if ip in ("-", "::1", "127.0.0.1") else ip,
                                  logon=WIN_LOGON.get(str(d.get("LogonType", "")), None),
                                  service=d.get("ServiceName"), path=d.get("ImagePath") or d.get("ServiceFileName") or d.get("ApplicationPath"),
-                                 detail=d.get("RuleName") or d.get("updateTitle") or d.get("TargetServerName"))
+                                 detail=d.get("RuleName") or d.get("updateTitle") or d.get("TaskName") or d.get("TargetServerName"))
             except (ValueError, KeyError, TypeError):
                 stats["errors"] += 1
 
@@ -190,11 +190,104 @@ def parse_linux_dpkg(path: Path, src: dict, stats: dict):
 
 
 def _int(v):
-    return int(v) if v and str(v).isdigit() else None
+    return int(v) if v is not None and str(v).isdigit() else None
+
+
+# ======================================================================= Sysmon (Windows, JSON lines like windows_events)
+def _account(u):
+    """'BASE\\h.rexhepi' -> 'h.rexhepi', 'NT AUTHORITY\\SYSTEM' -> 'SYSTEM'."""
+    return str(u).rsplit("\\", 1)[-1] if u else None
+
+
+def parse_windows_sysmon(path: Path, src: dict, stats: dict):
+    """Microsoft-Windows-Sysmon/Operational: 1 process created, 3 network connection, 11 file created."""
+    with open(path, encoding="utf-8-sig", errors="replace") as fh:
+        for n, line in enumerate(fh, 1):
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+                _seen(stats, r["TimeCreated"])
+                d, eid = r.get("EventData") or {}, int(r["Id"])
+                base = dict(os="windows", host=r.get("MachineName"), user=_account(d.get("User")), path=d.get("Image"), code=eid)
+                if eid == 1:
+                    yield make_event(src["name"], n, line, src["path"], r["TimeCreated"], **base, type="process", action="process-start",
+                                     outcome="success", parent=d.get("ParentImage"), detail=d.get("CommandLine"))
+                elif eid == 3:
+                    yield make_event(src["name"], n, line, src["path"], r["TimeCreated"], **base, type="network", action="connect",
+                                     outcome="success", proto=str(d.get("Protocol", "")).lower() or None, src_ip=d.get("SourceIp"),
+                                     src_port=_int(d.get("SourcePort")), dst_ip=d.get("DestinationIp"),
+                                     dst_port=_int(d.get("DestinationPort")),
+                                     direction="outbound" if str(d.get("Initiated", "true")).lower() == "true" else "inbound")
+                elif eid == 11:
+                    yield make_event(src["name"], n, line, src["path"], r["TimeCreated"], **{**base, "path": d.get("TargetFilename")},
+                                     type="file", action="file-created", outcome="success", detail=d.get("Image"))
+                else:
+                    stats["skipped"] += 1
+            except (ValueError, KeyError, TypeError):
+                stats["errors"] += 1
+
+
+# ======================================================================= Zeek conn.log (network sensor)
+
+def parse_zeek_conn(path: Path, src: dict, stats: dict):
+    """Zeek conn.log, JSON (one object per line) or the default TSV with a #fields header.
+
+    One event per connection, seen by the sensor (host = the sensor). action 'flow' on purpose: the host-firewall
+    rules (action allow/block) do not count sensor flows twice; the flow rules use their own conditions.
+    """
+    fields = None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for n, line in enumerate(fh, 1):
+            if not line.strip():
+                continue
+            try:
+                if line.startswith("#"):
+                    if line.startswith("#fields"):
+                        fields = line.rstrip("\n").split("\t")[1:]
+                    continue
+                r = json.loads(line) if line.lstrip().startswith("{") else dict(zip(fields or [], line.rstrip("\n").split("\t")))
+                ts = datetime.fromtimestamp(float(r["ts"]), tz=timezone.utc)
+                _seen(stats, ts)
+                state = r.get("conn_state")
+                yield make_event(src["name"], n, line, src["path"], ts, os="network", host=src.get("host"), sensor=True,
+                                 type="network", action="flow", outcome="success" if state in ("SF", "S1", "S2", "S3", "RSTO", "RSTR") else "failure",
+                                 proto=r.get("proto"), src_ip=r["id.orig_h"], src_port=_int(r.get("id.orig_p")), dst_ip=r["id.resp_h"],
+                                 dst_port=_int(r.get("id.resp_p")), service=None if r.get("service") in (None, "-") else r.get("service"),
+                                 conn_state=state, bytes=(_int(r.get("orig_bytes")) or 0) + (_int(r.get("resp_bytes")) or 0))
+            except (ValueError, KeyError, TypeError):
+                stats["errors"] += 1
+
+
+# ======================================================================= Mail security gateway (JSON lines)
+def parse_mail_gateway(path: Path, src: dict, stats: dict):
+    """One event per recipient: user = the recipient's account (local part), so a mail links to that user's logons/processes.
+
+    Fields used: ts, direction, client_ip, from, to[], subject, attachments[{name}], verdict, action, score.
+    """
+    with open(path, encoding="utf-8-sig", errors="replace") as fh:
+        for n, line in enumerate(fh, 1):
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+                _seen(stats, r["ts"])
+                names = [a.get("name", "") for a in r.get("attachments") or []]
+                rcpts = r.get("to") or [None]
+                for to in rcpts if r.get("direction") == "inbound" else [r.get("from")]:
+                    yield make_event(src["name"], n, line, src["path"], r["ts"], os="network", host=src.get("host"), type="email",
+                                     action=r.get("action"), outcome="success" if r.get("action") == "delivered" else "failure",
+                                     direction=r.get("direction"), src_ip=r.get("client_ip"), sender=r.get("from"), recipient=to,
+                                     user=str(to).split("@")[0] if to else None, subject=r.get("subject"),
+                                     attachments=" ".join(names) or None, verdict=r.get("verdict"), score=r.get("score"),
+                                     detail=f"{r.get('subject', '')} [{', '.join(names)}]" if names else r.get("subject"))
+            except (ValueError, KeyError, TypeError, AttributeError):
+                stats["errors"] += 1
 
 
 PARSERS = {"windows_events": parse_windows_events, "windows_firewall": parse_windows_firewall, "linux_auth": parse_linux_auth,
-           "linux_ufw": parse_linux_ufw, "linux_syslog": parse_linux_syslog, "linux_dpkg": parse_linux_dpkg}
+           "linux_ufw": parse_linux_ufw, "linux_syslog": parse_linux_syslog, "linux_dpkg": parse_linux_dpkg,
+           "windows_sysmon": parse_windows_sysmon, "zeek_conn": parse_zeek_conn, "mail_gateway": parse_mail_gateway}
 
 
 def read_all(sources: list[dict], folder: Path) -> tuple[list[dict], list[dict]]:
@@ -204,7 +297,10 @@ def read_all(sources: list[dict], folder: Path) -> tuple[list[dict], list[dict]]
         stats = {"source": src["name"], "parser": src["parser"], "host": src.get("host"), "events": 0, "skipped": 0, "errors": 0,
                  "missing": False, "times": []}
         path = Path(folder) / src["path"]
-        if not path.exists():
+        if src["parser"] not in PARSERS:
+            stats["errors"] += 1
+            stats["note"] = f"no parser named '{src['parser']}'"
+        elif not path.exists():
             stats["missing"] = True
         else:
             for ev in PARSERS[src["parser"]](path, src, stats):

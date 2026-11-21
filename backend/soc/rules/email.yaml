@@ -1,0 +1,14 @@
+# Mail security gateway: what reached a user's mailbox. Mails the gateway already quarantined or rejected are handled.
+rules:
+  - id: MAIL-001
+    type: match
+    short: Phishing mail with a risky attachment
+    title: Mail with a risky attachment delivered
+    attack: [T1566.001]
+    severity: 6
+    where:
+      type: email
+      action: delivered
+      direction: inbound
+      attachments|re: ["(?i)\\.(docm|xlsm|pptm|dotm|js|jse|vbs|vbe|hta|exe|scr|lnk|iso|img|one|wsf|bat|cmd|ps1)\\b"]
+    text: "Mail from {sender} ({src_ip}) with attachment {attachments} delivered to {recipient} at {first}, gateway score {score}"

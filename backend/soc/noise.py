@@ -28,9 +28,12 @@ def _in_window(t: datetime, ticket: dict) -> bool:
 def tag(events: list[dict], maintenance: dict) -> None:
     tickets = maintenance.get("tickets", [])
     for e in events:
+        # a network sensor (Zeek) logs other machines' traffic: judge it by the machines at both ends, not by the sensor
+        own = {e.get("src_host"), e.get("dst_host")} if e.get("sensor") else {e.get("host")}
+        own = {str(h).lower() for h in own if h}
         for tk in tickets:
-            hosts = [h.lower() for h in tk.get("hosts", [])]
-            if str(e.get("host", "")).lower() in hosts and _in_window(e["time"], tk) and any(matches(e, p) for p in tk.get("allow", [])):
+            hosts = {h.lower() for h in tk.get("hosts", [])}
+            if own & hosts and _in_window(e["time"], tk) and any(matches(e, p) for p in tk.get("allow", [])):
                 e["ticket"] = tk["id"]
                 break
 
