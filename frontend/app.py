@@ -180,6 +180,13 @@ def _short(text: Any, n: int = 140) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+# Cyber Sentinels logo: a shield with its left half filled (also used as the browser-tab icon)
+LOGO_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="{size}" height="{size}" '
+            'style="display:block"><path d="M32 4 L56 12 V30 C56 45 46 55 32 60 C18 55 8 45 8 30 V12 Z" fill="none" '
+            'stroke="{color}" stroke-width="4" stroke-linejoin="round"/>'
+            '<path d="M32 4 L8 12 V30 C8 45 18 55 32 60 Z" fill="{color}"/></svg>')
+FAVICON = Path(__file__).resolve().parent / "assets" / "favicon.svg"
+
 CSS = """
 <style>
   body { background: #eef2f7; color: #142235; }
@@ -265,7 +272,7 @@ class DashboardPage:
         self._build_header()
         with ui.left_drawer(fixed=True, bordered=False).props("width=230 breakpoint=900") as self.drawer:
             with ui.row().classes("items-center gap-2 px-4 pt-4 pb-2"):
-                ui.icon("shield").classes("text-3xl").style(f"color:{COLORS['teal']}")
+                ui.html(LOGO_SVG.format(color="#ffffff", size=30), sanitize=False)   # our own constant SVG
                 with ui.column().classes("gap-0"):
                     ui.label("CYBER SENTINELS").classes("text-white font-bold")
                     ui.label("LOCAL SOC CONSOLE").classes("text-xs").style("color:#8aa0b7")
@@ -311,8 +318,8 @@ class DashboardPage:
                 ui.button(icon="menu", on_click=lambda: self.drawer.toggle()).props("flat round color=white dense")
                 self.view_title = ui.label("Security operations").classes("text-white text-lg font-semibold")
             with ui.row().classes("items-center gap-2"):
-                self.data_badge = ui.badge("MONITORING · STARTING").style("background:#1b3249;color:#dce8f2")
-                self.model_badge = ui.badge("QWEN3 · CHECKING").style("background:#1b3249;color:#dce8f2")
+                self.data_badge = ui.badge("MONITORING · STARTING", color=None).style("background:#1b3249;color:#dce8f2")
+                self.model_badge = ui.badge("QWEN3 · CHECKING", color=None).style("background:#1b3249;color:#dce8f2")
                 self.refresh_button = ui.button("Refresh", icon="refresh", on_click=self.refresh).props(
                     "unelevated dense no-caps").style(f"background:{COLORS['blue']};color:white")
                 # kept for the code that updates them, but not shown: data loads by itself and
@@ -368,13 +375,13 @@ class DashboardPage:
             with ui.element("div").classes("soc-card p-3 w-full"):
                 with ui.row().classes("w-full items-center justify-between"):
                     ui.label("INCIDENT QUEUE").classes("soc-title")
-                    self.queue_count = ui.badge("0").style(f"background:#eaf1fc;color:{COLORS['blue']}")
+                    self.queue_count = ui.badge("0", color=None).style(f"background:#eaf1fc;color:{COLORS['blue']}")
                 ui.input(placeholder="Filter by title, host, account…",
                          on_change=lambda e: self._set_incident_query(e.value)).props("dense outlined clearable").classes(
                     "w-full mt-2")
                 with ui.row().classes("w-full items-center justify-between mt-2"):
                     ui.toggle(["All", "P1", "P2", "P3"], value="All",
-                              on_change=lambda e: self._set_priority_filter(e.value)).props("dense no-caps unelevated")
+                              on_change=lambda e: self._set_priority_filter(e.value)).props("dense no-caps outline color=grey-6 toggle-color=blue-8")
                     ui.switch("Show closed only", on_change=lambda e: self._set_show_closed(e.value)).props("dense")
                 self.incident_queue = ui.column().classes("w-full gap-2 mt-3")
             with ui.element("div").classes("soc-card p-4 w-full"):
@@ -385,9 +392,9 @@ class DashboardPage:
                         self.incident_title = ui.label("Select an incident").classes("text-xl font-bold")
                         self.incident_badges = ui.row().classes("gap-2 items-center")
                     with ui.column().classes("items-end gap-2"):
-                        self.priority_badge = ui.badge("—").style(f"background:#eaf1fc;color:{COLORS['blue']}")
+                        self.priority_badge = ui.badge("—", color=None).style(f"background:#eaf1fc;color:{COLORS['blue']}")
                         self.close_button = ui.button("Close incident", icon="task_alt",
-                                                      on_click=self._ask_close_incident).props("unelevated dense no-caps")
+                                                      on_click=self._ask_close_incident).props("outline dense no-caps color=grey-8")
                 self.attack_path = ui.row().classes("w-full items-center flex-wrap gap-1 mt-3")
                 with ui.tabs().props("dense no-caps inline-label align=left").classes("mt-3") as dtabs:
                     ui.tab("story", "Story & path", icon="account_tree")
@@ -411,7 +418,7 @@ class DashboardPage:
                         ).classes("w-full soc-table").props("flat bordered dense wrap-cells")
                     with ui.tab_panel("ai").classes("px-0"):
                         with ui.row().classes("w-full items-center justify-between gap-2"):
-                            self.ai_assessment = ui.badge("ADVISORY").style(f"background:#eaf1fc;color:{COLORS['blue']}")
+                            self.ai_assessment = ui.badge("ADVISORY", color=None).style(f"background:#eaf1fc;color:{COLORS['blue']}")
                             self.regenerate_button = ui.button("Regenerate explanation", icon="auto_awesome",
                                                                on_click=self.regenerate_explanation).props("flat dense no-caps")
                         self.ai_status = ui.label("Qwen3 explains evidence; deterministic rules decide detection.").classes(
@@ -500,7 +507,7 @@ class DashboardPage:
                       style="border-radius:9999px;font-weight:600;padding:4px 8px">{{ props.value }}</q-badge></q-td>""")
             with ui.column().classes("w-full gap-4"):
                 with self._card("THREAT INTELLIGENCE"):
-                    self.intel_count = ui.badge("0 findings").style(f"background:#e6f5f0;color:{COLORS['teal']}")
+                    self.intel_count = ui.badge("0 findings", color=None).style(f"background:#e6f5f0;color:{COLORS['teal']}")
                     self.intel_container = ui.column().classes("w-full gap-2 mt-2")
                 with self._card("HUNT REQUESTS  ·  answered by the SOC"):
                     self.hunts_box = ui.column().classes("w-full gap-2 mt-2")
@@ -512,7 +519,7 @@ class DashboardPage:
                 ui.label("DETECTION ALERTS").classes("soc-title")
                 with ui.row().classes("items-center gap-2"):
                     self.alert_filter = ui.toggle(["Open", "Closed", "All"], value="Open",
-                                                  on_change=lambda: self._render_alerts()).props("dense no-caps unelevated")
+                                                  on_change=lambda: self._render_alerts()).props("dense no-caps outline color=grey-6 toggle-color=blue-8")
             ui.label("Close an alert when it is handled. Closed alerts are hidden for this session only.").classes(
                 "text-xs").style(f"color:{COLORS['muted']}")
             self.alert_table = ui.table(
@@ -1046,13 +1053,13 @@ class DashboardPage:
         with card:
             with ui.row().classes("w-full items-center justify-between no-wrap gap-2"):
                 with ui.row().classes("items-center gap-2 no-wrap"):
-                    ui.badge(pr).style(f"background:{PRIORITY_COLOR.get(pr)};color:white")
+                    ui.badge(pr, color=None).style(f"background:{PRIORITY_COLOR.get(pr)};color:white")
                     ui.label(f"{_when(inc.get('start'), '%m-%d %H:%M')} · score {inc.get('score', '—')}").classes(
                         "text-xs").style(f"color:{COLORS['muted']}")
                 with ui.row().classes("items-center gap-1 no-wrap"):
                     self._verdict_badge(inc)
                     if closed:
-                        ui.badge(f"CLOSED · {self.closed_incidents[iid]['reason']}").style("background:#e8f5ed;color:#23774d")
+                        ui.badge(f"CLOSED · {self.closed_incidents[iid]['reason']}", color=None).style("background:#e8f5ed;color:#23774d")
             ui.label(_short(inc.get("title"), 110 if compact else 150)).classes("text-sm font-semibold mt-1")
             if not compact:
                 hosts = ", ".join(h.get("host", "") for h in inc.get("hosts", [])[:4])
@@ -1070,9 +1077,9 @@ class DashboardPage:
         label, bg, fg, icon = VERDICT_STYLE[v]
         tip = "; ".join(r.get("text", "") for r in (item.get("verification") or {}).get("reasons", [])[:3])
         if chip:
-            ui.chip(f"verifier: {label.lower()}", icon=icon).props("dense").style(f"background:{bg};color:{fg}").tooltip(tip)
+            ui.chip(f"verifier: {label.lower()}", icon=icon, color=None).props("dense").style(f"background:{bg};color:{fg}").tooltip(tip)
         else:
-            ui.badge(label).style(f"background:{bg};color:{fg};font-weight:700").tooltip(tip)
+            ui.badge(label, color=None).style(f"background:{bg};color:{fg};font-weight:700").tooltip(tip)
 
     def _render_priority_queue(self) -> None:
         self.incident_queue.clear()
@@ -1127,18 +1134,18 @@ class DashboardPage:
         with self.incident_badges:
             self._verdict_badge(incident, chip=True)
             for acc in incident.get("compromised_accounts", []):
-                ui.chip(f"compromised: {acc}", icon="person_off").props("dense").style("background:#fdecef;color:#c2364f")
+                ui.chip(f"compromised: {acc}", icon="person_off", color=None).props("dense").style("background:#fdecef;color:#c2364f")
             for ip in incident.get("unknown_ips", [])[:4]:
                 ui.chip(ip, icon="public").props("dense outline")
             if closed:
                 c = self.closed_incidents[iid]
-                ui.chip(f"closed · {c['reason']}" + (f" · {c['note']}" if c.get("note") else ""), icon="task_alt").props(
+                ui.chip(f"closed · {c['reason']}" + (f" · {c['note']}" if c.get("note") else ""), icon="task_alt", color=None).props(
                     "dense").style("background:#e8f5ed;color:#23774d")
         self.attack_path.clear()
         with self.attack_path:
             stages = incident.get("stages", [])
             for n, st in enumerate(stages):
-                ui.chip(st.upper(), icon=STAGE_ICON.get(st, "circle")).props("dense").style(
+                ui.chip(st.upper(), icon=STAGE_ICON.get(st, "circle"), color=None).props("dense").style(
                     f"background:#eaf1fc;color:{COLORS['blue']};font-weight:600")
                 if n < len(stages) - 1:
                     ui.icon("chevron_right").style(f"color:{COLORS['muted']}")
@@ -1397,7 +1404,7 @@ class DashboardPage:
                                 ui.label(a.get("title")).classes("font-bold")
                                 ui.label(_short(a.get("watches"), 60)).classes("text-xs").style(f"color:{COLORS['muted']}")
                         if a.get("alerts"):
-                            ui.badge(f"{a['alerts']} alerts").style(f"background:{COLORS['red']};color:white")
+                            ui.badge(f"{a['alerts']} alerts", color=None).style(f"background:{COLORS['red']};color:white")
                     ch = a.get("today", {}).get("change_pct")
                     with ui.row().classes("items-end gap-3 mt-2"):
                         ui.label(f"{a.get('events_today', 0):,}").classes("text-2xl font-bold")
@@ -1414,7 +1421,7 @@ class DashboardPage:
                     if a.get("incidents"):
                         with ui.row().classes("gap-1 mt-2 flex-wrap"):
                             for iid in a["incidents"][:8]:
-                                ui.chip(iid, on_click=lambda _, k=iid: self.select_incident(k, go=True)).props(
+                                ui.chip(iid, on_click=lambda _, k=iid: self.select_incident(k, go=True), color=None).props(
                                     "dense clickable").style(
                                     f"background:{'#ece7fb' if iid == sel_id else '#f1f4f8'};color:{COLORS['ink']}")
                     if saw:
@@ -1463,9 +1470,9 @@ class DashboardPage:
                     with ui.row().classes("w-full items-center justify-between gap-2"):
                         ui.label(title).classes("font-bold text-sm")
                         if is_vuln and finding.get("cisa_kev"):
-                            ui.badge("CISA KEV").style(f"background:#fdecef;color:{COLORS['red']}")
+                            ui.badge("CISA KEV", color=None).style(f"background:#fdecef;color:{COLORS['red']}")
                         elif not is_vuln:
-                            ui.badge(f"Confidence {_number(finding.get('confidence')):.0%}").style(f"background:#eaf1fc;color:{COLORS['blue']}")
+                            ui.badge(f"Confidence {_number(finding.get('confidence')):.0%}", color=None).style(f"background:#eaf1fc;color:{COLORS['blue']}")
                     ui.label(_text(finding.get("summary"))).classes("text-sm")
                     meta = ["Assets: " + ", ".join(str(i) for i in finding.get("affected_assets", []))]
                     if is_vuln:
@@ -1474,7 +1481,7 @@ class DashboardPage:
                         meta.append(f"Source: {finding['source']}")
                     ui.label(" · ".join(meta)).classes("text-xs").style(f"color:{COLORS['muted']}")
                     for iid in finding.get("matched_incidents", []) or []:
-                        ui.chip(f"matches {iid}", on_click=lambda _, k=iid: self.select_incident(k, go=True)).props(
+                        ui.chip(f"matches {iid}", on_click=lambda _, k=iid: self.select_incident(k, go=True), color=None).props(
                             "dense clickable").style("background:#fdecef;color:#c2364f")
 
     # ---------------------------------------------------------------- search
@@ -1889,7 +1896,8 @@ def main(argv: list[str] | None = None) -> None:
     def dashboard() -> None:
         DashboardPage(provider, refresh_seconds)
 
-    ui.run(title="Cyber Sentinels | SOC console", host=args.host, port=args.port, reload=False, show=True)
+    ui.run(title="Cyber Sentinels | SOC console", host=args.host, port=args.port, reload=False, show=True,
+           favicon=FAVICON if FAVICON.exists() else None)
 
 
 if __name__ == "__main__":
