@@ -27,6 +27,7 @@ from AI_Log_Analyzer.ai_log_analyzer import (
 )
 from backend.soc import knowledge as kb_store
 from frontend import cache as result_cache
+from frontend import scenario as exercise
 from frontend import search as event_search
 from frontend.data_provider import CsvSimulationProvider, DashboardProvider, IntegratedAgentProvider
 from frontend.explanations import instant_overview, plain_alert_explanation
@@ -197,6 +198,9 @@ CSS = """
   .soc-field-val:hover { background: #e8f0fb; }
   .soc-table .q-table__middle { max-height: 520px; }
   .soc-explanation-text { overflow-wrap: anywhere; }
+  .soc-attack { border: 1px solid #e3e9f0; border-left: 5px solid #c2364f; border-radius: 12px; padding: 12px 14px; background: #fff; }
+  .soc-step { background: #fdecef; color: #8e1f33; border-radius: 9999px; padding: 2px 10px; font-size: 11px; font-weight: 600; }
+  .soc-pill { border-radius: 9999px; padding: 2px 10px; font-size: 11px; font-weight: 600; display: inline-block; }
   @media (max-width: 1200px) { .soc-grid-2, .soc-grid-3 { grid-template-columns: minmax(0, 1fr); } }
 </style>
 """
@@ -258,6 +262,7 @@ class DashboardPage:
                 self.tab_sources = ui.tab("sources", "Sources & intel", icon="sensors")
                 self.tab_alerts = ui.tab("alerts", "Alerts", icon="notifications_active")
                 self.tab_knowledge = ui.tab("knowledge", "Knowledge import", icon="school")
+                self.tab_scenario = ui.tab("scenario", "Exercise scenario", icon="science")
             ui.label("Advice only: nothing is blocked or changed automatically.").classes(
                 "text-xs px-4 pt-6").style("color:#8aa0b7")
         with ui.column().classes("w-full p-4 gap-4").style("max-width:1600px;margin:0 auto"):
@@ -279,6 +284,8 @@ class DashboardPage:
                     self._build_alerts()
                 with ui.tab_panel("knowledge").classes("p-0"):
                     self._build_knowledge()
+                with ui.tab_panel("scenario").classes("p-0"):
+                    self._build_scenario()
         self._build_dialogs()
 
     def _build_header(self) -> None:
@@ -511,6 +518,128 @@ class DashboardPage:
                 </q-td>""")
             self.alert_table.on("close_alert", lambda e: self._close_alert(e.args))
             self.alert_table.on("reopen_alert", lambda e: self._reopen_alert(e.args))
+
+    # ---------------------------------------------------------------- exercise scenario (answer key vs findings)
+    def _build_scenario(self) -> None:
+        self.scenario_box = ui.column().classes("w-full gap-4")
+
+    def _ai_summaries(self) -> dict[str, str]:
+        """The newest prepared AI summary per incident (python -m frontend.precompute)."""
+        out: dict[str, tuple[str, str]] = {}
+        for item in (self.ai_cache.items or {}).values():
+            iid, when = str(item.get("incident")), str(item.get("created", ""))
+            text = str((item.get("result") or {}).get("summary") or "")
+            if text and (iid not in out or when > out[iid][0]):
+                out[iid] = (when, text)
+        return {k: v[1] for k, v in out.items()}
+
+    def _render_scenario(self) -> None:
+        box = getattr(self, "scenario_box", None)
+        if box is None or self.snapshot is None:
+            return
+        box.clear()
+        truth = exercise.load_truth(getattr(self.provider, "log_dir", None))
+        view = exercise.build(truth, self.snapshot.incidents)
+        muted, ink = COLORS["muted"], COLORS["ink"]
+        with box:
+            if view is None:
+                with self._card("EXERCISE SCENARIO"):
+                    ui.label("This log folder has no answer key (truth.json). Open the 50-device base "
+                             "(backend/soc/fleet/logs) to compare the SOC with the planted story.").classes(
+                        "text-sm").style(f"color:{muted}")
+                return
+            ui.label("Synthetic exercise: what was planted in the logs, next to what the SOC found on its own. "
+                     "The engine never reads this answer key.").classes("text-xs").style(f"color:{muted}")
+            harmless = len(view["lookalikes"]) + len(view["routine"]) + len(view["maintenance"])
+            with ui.row().classes("w-full gap-3 flex-wrap"):
+                for title, value, color, icon in (
+                        ("ATTACKS DETECTED", f"{view['detected']} / {len(view['attacks'])}",
+                         COLORS["green"] if view["detected"] == len(view["attacks"]) else COLORS["red"], "gpp_maybe"),
+                        ("HARMLESS ACTIVITY ESCALATED", f"{view['false_alarms']} / {harmless}",
+                         COLORS["green"] if not view["false_alarms"] else COLORS["amber"], "verified_user"),
+                        ("APPROVED MAINTENANCE", str(len(view["maintenance"])), COLORS["blue"], "build"),
+                        ("SILENT LOG SOURCE", str(view["silent"].get("source", "none")), COLORS["violet"], "sensors_off")):
+                    with ui.element("div").classes("soc-card soc-kpi"):
+                        with ui.row().classes("items-center justify-between w-full no-wrap"):
+                            ui.label(title).classes("k")
+                            ui.icon(icon).style(f"color:{color}")
+                        ui.label(value).classes("v").style(f"color:{color};font-size:22px;overflow-wrap:anywhere")
+
+            ai = self._ai_summaries()
+            with self._card(f"ABNORMAL AND MALICIOUS  ·  {len(view['attacks'])} planted attacks"):
+                with ui.column().classes("w-full gap-3 mt-2"):
+                    for a in view["attacks"]:
+                        self._scenario_attack(a, ai, muted, ink)
+
+            with ui.element("div").classes("soc-grid-3 w-full"):
+                with self._card("ABNORMAL BUT HARMLESS  ·  look-alikes"):
+                    for x in view["lookalikes"]:
+                        self._scenario_row(x["id"], x["text"], x["incidents"], muted)
+                with self._card("NORMAL ROUTINE  ·  every day"):
+                    ui.label("Day 1 (21 Nov) is normal operations only: the engine learns what is usual from it. "
+                             "These routines run on both days.").classes("text-xs mt-1").style(f"color:{muted}")
+                    for x in view["routine"]:
+                        self._scenario_row(x["id"], x["text"], x["incidents"], muted)
+                with self._card("APPROVED MAINTENANCE  ·  set aside by ticket"):
+                    for m in view["maintenance"]:
+                        self._scenario_row(m["ticket"], f"{m['key']} · {m['lines']:,} log lines covered by the ticket",
+                                           m["incidents"], muted)
+                    silent = view["silent"]
+                    if silent:
+                        ui.label("SILENT SOURCE").classes("soc-title mt-3")
+                        ui.label(f"{silent.get('source')} stops writing {_text(silent.get('from'))[11:16]}–"
+                                 f"{_text(silent.get('to'))[11:16]} UTC. {silent.get('note', '')}").classes(
+                            "text-xs soc-explanation-text").style(f"color:{ink}")
+
+    def _scenario_attack(self, a: dict, ai: dict[str, str], muted: str, ink: str) -> None:
+        found = a["incidents"]
+        with ui.element("div").classes("soc-attack w-full").style(
+                "" if found else f"border-left-color:{COLORS['muted']}"):
+            with ui.row().classes("w-full items-start justify-between no-wrap gap-3"):
+                with ui.column().classes("gap-1 grow").style("min-width:0"):
+                    with ui.row().classes("items-center gap-2 flex-wrap"):
+                        ui.label(a["id"]).classes("soc-pill").style(f"background:{COLORS['red']};color:white")
+                        ui.label(f"{_text(a.get('start'))[5:16].replace('T', ' ')} – {_text(a.get('end'))[11:16]} UTC"
+                                 ).classes("text-xs").style(f"color:{muted}")
+                    ui.label(_text(a.get("title")).replace(" -> ", " → ")).classes("text-sm font-bold soc-explanation-text")
+                if found:
+                    inc = found[0]
+                    ui.button(f"{inc['id']} · {inc.get('priority')}", icon="check_circle",
+                              on_click=lambda _=None, i=inc["id"]: self.select_incident(i, go=True)).props(
+                        "unelevated dense no-caps color=green-9").style("flex-shrink:0")
+                else:
+                    ui.label("Not raised").classes("soc-pill").style("background:#fdecef;color:#c2364f")
+            if a["steps"]:
+                with ui.row().classes("items-center gap-1 flex-wrap mt-2"):
+                    for n, s in enumerate(a["steps"]):
+                        if n:
+                            ui.icon("chevron_right").style(f"color:{muted}")
+                        ui.label(s["label"]).classes("soc-step")
+            with ui.row().classes("gap-x-4 gap-y-1 flex-wrap mt-2 text-xs").style(f"color:{ink}"):
+                for label, key in (("Machines", "hosts"), ("Accounts", "accounts"), ("Addresses", "ips")):
+                    if a.get(key):
+                        ui.label(f"{label}: {', '.join(map(str, a[key]))}").classes("soc-explanation-text")
+            if a.get("techniques"):
+                with ui.row().classes("gap-1 flex-wrap mt-1"):
+                    for t in a["techniques"]:
+                        ui.label(str(t)).classes("soc-pill").style("background:#eaf1fc;color:#3473d1")
+            text = ai.get(found[0]["id"]) if found else None
+            if text:
+                with ui.row().classes("items-start no-wrap gap-2 mt-2"):
+                    ui.icon("auto_awesome").style(f"color:{COLORS['violet']}")
+                    ui.label(text).classes("text-xs soc-explanation-text").style(f"color:{ink}")
+
+    @staticmethod
+    def _scenario_row(name: str, text: str, incidents: list[str], muted: str) -> None:
+        with ui.row().classes("w-full items-start no-wrap gap-2 py-2").style("border-bottom:1px solid #eef2f6"):
+            ok = not incidents
+            ui.icon("check_circle" if ok else "error").style(
+                f"color:{COLORS['green'] if ok else COLORS['amber']};margin-top:2px")
+            with ui.column().classes("gap-0 grow").style("min-width:0"):
+                ui.label(name).classes("text-sm font-bold")
+                ui.label(text.replace(" -> ", " → ")).classes("text-xs soc-explanation-text").style(f"color:{muted}")
+                ui.label("not escalated" if ok else "raised as " + ", ".join(incidents)).classes("text-xs").style(
+                    f"color:{COLORS['green'] if ok else COLORS['amber']}")
 
     # ---------------------------------------------------------------- knowledge import (text only)
     def _build_knowledge(self) -> None:
@@ -758,6 +887,7 @@ class DashboardPage:
         self._render_alerts()
         self._render_entity_options()
         self._render_knowledge()
+        self._render_scenario()
         if not self.search_results:
             self.run_search()
 
