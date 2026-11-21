@@ -126,6 +126,15 @@ def _dt(value: Any) -> datetime | None:
     return None
 
 
+def _most_specific(techniques: list[Record]) -> list[Record]:
+    """Hide a parent technique (T1110) when its sub-technique (T1110.001) is in the same list: one fact, shown once."""
+    ids = {str(t.get("id")) for t in techniques}
+    return [t for t in techniques if not any(i.startswith(f"{t.get('id')}.") for i in ids)]
+
+
+_RIGHTS_SENTENCE = re.compile(r"\s*Rights gained or stolen: [^.]*\.")
+
+
 def _when(value: Any, fmt: str = "%Y-%m-%d %H:%M UTC") -> str:
     d = _dt(value)
     if d is None:
@@ -968,12 +977,24 @@ class DashboardPage:
         self._render_attack_matrix(opened)
 
     def _render_attack_matrix(self, incidents: list[Record]) -> None:
+        # one card per technique: T1110 and T1110.001 from different incidents are the same card ("T1110 · .001")
         tech: dict[str, dict] = {}
         for inc in incidents:
-            for t in inc.get("attack", []):
-                d = tech.setdefault(t.get("id"), {"name": t.get("name", ""), "tactic": t.get("tactic", ""), "n": 0, "inc": []})
-                d["n"] += 1
-                d["inc"].append(str(inc.get("id")))
+            for t in _most_specific(inc.get("attack", [])):
+                tid = str(t.get("id"))
+                base, _, sub = tid.partition(".")
+                d = tech.setdefault(f"{t.get('tactic', '')}|{base}", {"id": base, "name": "", "tactic": t.get("tactic", ""),
+                                                                      "n": 0, "inc": [], "subs": {},
+                                           "parent": False})
+                name = str(t.get("name", ""))
+                if sub:
+                    d["subs"][sub] = name.split(": ")[-1]                # "Brute Force: Password Guessing"
+                    d["name"] = d["name"] or name.split(": ")[0]
+                else:
+                    d["parent"], d["name"] = True, name
+                if str(inc.get("id")) not in d["inc"]:
+                    d["n"] += 1
+                    d["inc"].append(str(inc.get("id")))
         self.attack_matrix.clear()
         with self.attack_matrix:
             for tactic in TACTICS:
@@ -981,13 +1002,17 @@ class DashboardPage:
                 with ui.element("div").classes("soc-tactic"):
                     ui.label(tactic).classes("text-xs font-bold").style(f"color:{COLORS['navy']}")
                     ui.label(f"{len(items)} technique(s)").classes("text-xs").style(f"color:{COLORS['muted']}")
-                    for tid, v in items:
+                    for _key, v in items:
+                        tid = v["id"]
                         shade = min(0.15 + 0.22 * v["n"], 0.9)
                         with ui.element("div").classes("soc-tech").style(
                                 f"background:rgba(194,54,79,{shade});color:{'white' if shade > .5 else COLORS['ink']}"):
-                            ui.label(f"{tid}").classes("font-bold")
-                            ui.label(_short(v["name"].split(": ")[-1], 34))
-                            ui.tooltip(f"{v['name']} · in {v['n']} incident(s): {', '.join(v['inc'])}")
+                            only_sub = len(v["subs"]) == 1 and not v["parent"]
+                            subs = (f".{next(iter(v['subs']))}" if only_sub else
+                                    " · " + ", ".join(f".{x}" for x in sorted(v["subs"])) if v["subs"] else "")
+                            ui.label(f"{tid}{subs}").classes("font-bold")
+                            ui.label(_short(next(iter(v["subs"].values())) if only_sub else v["name"], 34))
+                            ui.tooltip(f"{v['name']}{subs} · in {v['n']} incident(s): {', '.join(v['inc'])}")
 
     # ---------------------------------------------------------------- incidents
     def _set_incident_query(self, value: str | None) -> None:
@@ -1120,8 +1145,10 @@ class DashboardPage:
             if incident.get("story"):
                 with ui.element("div").classes("w-full p-3").style("background:#f5f8fc;border-radius:12px;border:1px solid #e3e9f0"):
                     ui.label("WHAT HAPPENED (rule-based, instant)").classes("soc-title")
-                    ui.label(incident["story"]).classes("text-sm mt-1 soc-explanation-text")
-            techniques = incident.get("attack", [])
+                    # the rights gained are listed right below ("Rights gained or stolen"), so not repeated here
+                    story = _RIGHTS_SENTENCE.sub("", incident["story"]) if incident.get("escalation") else incident["story"]
+                    ui.label(story).classes("text-sm mt-1 soc-explanation-text")
+            techniques = _most_specific(incident.get("attack", []))
             if techniques:
                 with ui.row().classes("gap-1 flex-wrap"):
                     for t in techniques:
@@ -1404,8 +1431,10 @@ class DashboardPage:
                 with ui.element("div").classes("w-full p-2").style(
                         f"border-left:4px solid {COLORS['red'] if found else COLORS['green']};background:#f7f9fc;border-radius:8px"):
                     ui.label(f"{_text(h.get('hunt_id'))} · {', '.join(map(str, h.get('target_assets', [])))}").classes("text-sm font-bold")
-                    ui.label(_text(h.get("status"), _text(h.get("hunt_query")))).classes("text-xs")
-                    for iid in h.get("incidents", []) or []:
+                    linked = h.get("incidents", []) or []
+                    # the incident ids are the clickable chips below, so the status text does not repeat them
+                    ui.label("found in:" if found and linked else _text(h.get("status"), _text(h.get("hunt_query")))).classes("text-xs")
+                    for iid in linked:
                         ui.chip(iid, on_click=lambda _, k=iid: self.select_incident(k, go=True)).props("dense clickable outline")
 
     def _render_member_one(self, snapshot: DashboardSnapshot) -> None:
