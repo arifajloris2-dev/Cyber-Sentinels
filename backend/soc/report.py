@@ -18,6 +18,7 @@ def jsonable(obj):
 def write(r: dict, out: Path) -> str:
     out.mkdir(parents=True, exist_ok=True)
     (out / "incidents.json").write_text(_j(r["incidents"]), encoding="utf-8")
+    (out / "intel.json").write_text(_j(r.get("intel", {})), encoding="utf-8")
     (out / "alerts.json").write_text(_j(r["alerts"]), encoding="utf-8")
     (out / "suppressed.json").write_text(_j({"tickets": r["maintenance"], "alerts": r["suppressed"]}), encoding="utf-8")
     (out / "health.json").write_text(_j({"sources": r["health"], "parsing": [{k: v for k, v in s.items() if k != "times"} for s in r["stats"]]}),
@@ -42,12 +43,24 @@ def markdown(r: dict) -> str:
         for a in i["alerts"]:
             ev = ", ".join(e["id"] for e in a["evidence"][:4]) + (" …" if a["count"] > 4 else "")
             L.append(f"| {a['time']:%H:%M:%S} | {a['stage']} | {a['rule']} | {a['text']} | {ev} |")
+        if i.get("intel"):
+            L += ["", "**Threat intel (OSINT) that matches this incident:**"]
+            L += [f"- `{x['id']}`: {x['why']}" + (f". {x['summary']}" if x.get("summary") else "") for x in i["intel"]]
         L += ["", "**ATT&CK:** " + " → ".join(f"{t['id']} {t['name']}" for t in i["attack"]), "",
               "**Why these belong together:** " + "; ".join(i["why_together"]), "",
               "**Suggested checks** (advice only: nothing was changed on any system):"]
         L += [f"- *{s['type']}*: {s['step']}" for s in i["next_checks"]] + [""]
     if r["singles"]:
         L += ["## Single alerts (not escalated)", ""] + [f"- {a['time']:%m-%d %H:%M} {a['rule']}: {a['text']}" for a in r["singles"]] + [""]
+    intel = r.get("intel") or {}
+    if intel.get("hunts") or intel.get("findings"):
+        L += ["## OSINT hunt requests (from Member 1)", ""]
+        L += [f"- **{h.get('hunt_id')}** on {', '.join(h.get('target_assets', []))} "
+              f"({', '.join(h.get('mitre_techniques', []))}): {h.get('status', 'not checked')}" for h in intel.get("hunts", [])]
+        unused = [f["id"] for f in intel.get("findings", []) if not f.get("matched_incidents")]
+        if unused:
+            L.append(f"- Findings with no matching activity in these logs: {', '.join(unused)}")
+        L += [f"- Source: `{Path(intel['source']).name}`" if intel.get("source") else "- Source: none", ""]
     L += ["## Approved maintenance recognised", ""]
     L += [f"- **{m['ticket']}** {m['title']}: {m['events']} events on {', '.join(m['hosts'])}, "
           f"{len(m['alerts_suppressed'])} alert(s) suppressed" for m in r["maintenance"]] or ["- none"]
