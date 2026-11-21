@@ -499,7 +499,7 @@ class DashboardPage:
                       : props.value.startsWith('SILENT') ? 'background:#fdecef;color:#c2364f' : 'background:#fff3df;color:#c27400'"
                       style="border-radius:9999px;font-weight:600;padding:4px 8px">{{ props.value }}</q-badge></q-td>""")
             with ui.column().classes("w-full gap-4"):
-                with self._card("THREAT INTELLIGENCE (Member 1)"):
+                with self._card("THREAT INTELLIGENCE"):
                     self.intel_count = ui.badge("0 findings").style(f"background:#e6f5f0;color:{COLORS['teal']}")
                     self.intel_container = ui.column().classes("w-full gap-2 mt-2")
                 with self._card("HUNT REQUESTS  ·  answered by the SOC"):
