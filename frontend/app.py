@@ -348,7 +348,7 @@ class DashboardPage:
                 with ui.row().classes("w-full items-center justify-between mt-2"):
                     ui.toggle(["All", "P1", "P2", "P3"], value="All",
                               on_change=lambda e: self._set_priority_filter(e.value)).props("dense no-caps unelevated")
-                    ui.switch("Show closed", on_change=lambda e: self._set_show_closed(e.value)).props("dense")
+                    ui.switch("Show closed only", on_change=lambda e: self._set_show_closed(e.value)).props("dense")
                 self.incident_queue = ui.column().classes("w-full gap-2 mt-3")
             with ui.element("div").classes("soc-card p-4 w-full"):
                 with ui.row().classes("w-full items-start justify-between gap-3 no-wrap"):
@@ -719,7 +719,8 @@ class DashboardPage:
         out = []
         for inc in self.incidents:
             iid = str(inc.get("id"))
-            if iid in self.closed_incidents and not self.show_closed:
+            # "Show closed" = only what was closed in this session; otherwise only open incidents
+            if (iid in self.closed_incidents) != self.show_closed:
                 continue
             if self.priority_filter != "All" and inc.get("priority") != self.priority_filter:
                 continue
@@ -887,7 +888,9 @@ class DashboardPage:
         self.queue_count.set_text(f"{len(self._open_incidents())} open")
         with self.incident_queue:
             if not visible:
-                ui.label("No incidents match. The deterministic SOC rules found nothing else to escalate.").classes(
+                ui.label("Nothing closed in this session yet. Closed incidents show here until the page is reloaded."
+                         if self.show_closed else
+                         "No incidents match. The deterministic SOC rules found nothing else to escalate.").classes(
                     "text-sm").style(f"color:{COLORS['muted']}")
             for inc in visible:
                 self._incident_card(inc)
@@ -969,7 +972,7 @@ class DashboardPage:
         nodes, links = [], []
         if path:
             order = list(dict.fromkeys([path[0]["from"]] + [h["to"] for h in path] + [h["from"] for h in path]))
-            nodes = [{"name": h, "x": 120 * k, "y": (k % 2) * 60, "symbolSize": 58,
+            nodes = [{"name": h, "x": 120 * k, "y": (k % 2) * 60, "symbolSize": 34,
                       "itemStyle": {"color": COLORS["red"] if k == 0 else COLORS["navy_light"]}} for k, h in enumerate(order)]
             links = [{"source": h["from"], "target": h["to"],
                       "label": {"show": True, "formatter": f"{'/'.join(map(str, h.get('ports', []))) or '-'}"
@@ -981,7 +984,7 @@ class DashboardPage:
                       "textStyle": {"fontSize": 12, "color": "#4d5f74"}},
             "tooltip": {},
             "series": [{"type": "graph", "layout": "none", "roam": True, "data": nodes, "links": links,
-                        "label": {"show": True, "color": "white", "fontSize": 10, "fontWeight": "bold"},
+                        "label": {"show": True, "position": "bottom", "color": "#142235", "fontSize": 11, "fontWeight": "bold"},
                         "edgeSymbol": ["none", "arrow"], "edgeSymbolSize": 10,
                         "lineStyle": {"width": 2, "color": COLORS["red"], "curveness": 0.15}}]})
         self.chart_graph.update()
@@ -989,12 +992,18 @@ class DashboardPage:
         with self.escalation_box:
             esc = incident.get("escalation") or []
             if esc:
-                ui.label("RIGHTS GAINED OR STOLEN").classes("soc-title")
-                with ui.timeline(side="right").classes("w-full"):
-                    for e in esc:
-                        ui.timeline_entry(_text(e.get("detail")), title=_text(e.get("what")).capitalize(),
-                                          subtitle=_when(e.get("time"), "%H:%M:%S UTC"), icon="admin_panel_settings",
-                                          color="red")
+                ui.label(f"RIGHTS GAINED OR STOLEN ({len(esc)})").classes("soc-title")
+                # compact rows that wrap to the card width (the Quasar timeline left a narrow column of dots)
+                for e in esc:
+                    with ui.row().classes("w-full items-start no-wrap gap-3 py-2").style("border-bottom:1px solid #eef2f6"):
+                        ui.icon("admin_panel_settings").classes("text-xl").style(f"color:{COLORS['red']};margin-top:2px")
+                        with ui.column().classes("gap-0 grow").style("min-width:0"):
+                            with ui.row().classes("items-baseline gap-2 flex-wrap"):
+                                ui.label(_text(e.get("what")).capitalize()).classes("text-sm font-bold")
+                                ui.label(_when(e.get("time"), "%H:%M:%S UTC")).classes("text-xs").style(
+                                    f"color:{COLORS['muted']}")
+                            ui.label(_text(e.get("detail"))).classes("text-xs soc-explanation-text").style(
+                                f"color:{COLORS['ink']}")
 
     def _render_timeline(self, incident: Record) -> None:
         agent_of = self._agent_of_source()
