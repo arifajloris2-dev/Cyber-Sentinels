@@ -46,6 +46,27 @@ incidents = analyse("soc/sample_logs")["incidents"]   # JSON-ready: for llm_advi
 | 7. Threat intel | `soc/intel.py` | Joins the OSINT agent's findings (Member 1, `osint_output.json`) to incidents: a CVE on an affected host whose ATT&CK technique the incident shows, or a leaked account used in the incident. Raises the score a little, adds checks, and answers every OSINT hunt request (found in which incident, or nothing in the logs). Intel never creates an incident by itself |
 | 8. Report | `soc/report.py` | `report.md` for people; `incidents.json`, `alerts.json`, `suppressed.json`, `health.json`, `intel.json` for other tools |
 
+## Agents (`soc/agents/`)
+
+One specialised agent per kind of system. Each owns the log formats of its system, learns its normal level from the
+baseline day, and reports **what it saw** (`agents.json`, the "What each agent saw" part of `report.md`, and
+`agents` in `correlation.analyse()`): volume against normal, approved-maintenance events it set aside, alerts it
+raised, the incidents those fed, silent sources, and plain-language highlights.
+
+| Agent | Reads | Typical highlights |
+|---|---|---|
+| Windows host | Security/System events | logons ok/failed, RDP, Kerberos tickets (RC4), services, accounts, privileged-group changes, admin shares |
+| Endpoint (Sysmon) | Sysmon 1/3/10/11 | processes, connections, files, LSASS opened, programs started by Office, busiest file writer |
+| Linux host | auth.log, syslog, dpkg | SSH ok/failed, sudo, root shells by non-admins, services, packages |
+| Host firewall | pfirewall.log, ufw.log | allowed/blocked, NEW zone-policy violations vs known exceptions |
+| Perimeter firewall | pfSense filterlog | inbound passed/blocked, most targeted, inbound to non-public ports |
+| Network sensor (Zeek) | conn.log | flows, to the internet, failed, largest upload |
+| Mail | gateway log, mail events | delivered/quarantined, risky attachments, clicks |
+
+**Add a system:** add one file `soc/agents/<name>.py` with `AGENT = Agent(name, title, watches, {parser: function}, highlights)`
+(the parse function can live in the same file) and, if needed, a rules file in `soc/rules/`. Nothing else changes.
+Agents only observe and report; none of them blocks or changes anything.
+
 ## Logs it reads
 
 | Machine | Log | Parser | Collect with |

@@ -30,6 +30,7 @@ def analyse(log_folder) -> dict:
     return report.jsonable({"incidents": r["incidents"], "singles": r["singles"], "suppressed": r["suppressed"],
                             "maintenance": r["maintenance"], "health": r["health"],
                             "threat_findings": r.get("intel", {}).get("findings", []), "hunts": r.get("intel", {}).get("hunts", []),
+                            "agents": r.get("agents", []),
                             "summary": {"events": r["events"], "rules": r["rules"], "alerts": len(r["alerts"]),
                                         "incidents": len(r["incidents"]), "seconds": r.get("seconds")}})
 

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from . import health, intel, noise
+from . import agents, health, intel, noise
 from .correlate import correlate, priority
 from .detect import enrich, load_rules, run_rules
 from .parsers import read_all
@@ -50,7 +50,8 @@ def detect(folder: Path, until: datetime | None = None, loaded=None, rules_dir: 
     if until is not None:
         events = [e for e in events if e["time"] <= until]
     events = [dict(e) for e in events]  # each run tags its own copies
-    empty = {"alerts": [], "suppressed": [], "maintenance": [], "health": [], "stats": stats, "events": 0, "rules": 0, "cfg": cfg}
+    empty = {"alerts": [], "suppressed": [], "maintenance": [], "health": [], "stats": stats, "events": 0, "rules": 0, "cfg": cfg,
+             "agents": []}
     if not events:
         return empty
     baseline_end = events[0]["time"] + timedelta(hours=cfg["baseline_hours"])
@@ -67,8 +68,10 @@ def detect(folder: Path, until: datetime | None = None, loaded=None, rules_dir: 
     for a in suppressed:
         a["ticket"] = by_id[a["evidence"][0]["id"]]["ticket"]
 
+    src_health = health.check(events, cfg["sources"], stats, baseline_end, end)
     return {"alerts": alerts, "suppressed": suppressed, "maintenance": noise.summary(approved, suppressed, cfg["maintenance"]),
-            "health": health.check(events, cfg["sources"], stats, baseline_end, end), "stats": stats, "events": len(events),
+            "health": src_health, "stats": stats, "events": len(events),
+            "agents": agents.summarise(events, alerts, suppressed, src_health, cfg["sources"], baseline_end, end),
             "rules": len(rules), "baseline_end": baseline_end, "end": end, "cfg": cfg, "seconds": round(time.perf_counter() - t0, 3)}
 
 
@@ -82,4 +85,5 @@ def run(folder: Path, until: datetime | None = None, loaded=None, rules_dir: Pat
     threat = intel.load(folder)                     # OSINT findings + hunt requests (Member 1), if any
     intel.attach(incidents, threat, priority)
     incidents.sort(key=lambda x: -x["score"])
+    agents.link_incidents(r.get("agents", []), incidents)
     return {**r, "incidents": incidents, "singles": singles, "intel": threat, "seconds": round(time.perf_counter() - t0, 3)}

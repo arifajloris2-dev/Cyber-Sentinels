@@ -123,6 +123,7 @@ def parse_windows_firewall(path: Path, src: dict, stats: dict):
                 continue
             yield make_event(src["name"], n, line, src["path"], f"{r['date']} {r['time']}", src.get("utc_offset"), os="windows",
                              host=src.get("host"), type="network", action="allow" if r["action"] == "ALLOW" else "block",
+                             outcome="success" if r["action"] == "ALLOW" else "failure",
                              proto=r["protocol"].lower(), src_ip=r["src-ip"], dst_ip=r["dst-ip"], src_port=_int(r["src-port"]),
                              dst_port=_int(r["dst-port"]), direction={"SEND": "outbound", "RECEIVE": "inbound"}.get(r.get("path")))
 
@@ -204,7 +205,8 @@ def parse_linux_ufw(path: Path, src: dict, stats: dict):
             stats["skipped"] += 1
             continue
         yield make_event(src["name"], n, line, src["path"], ts, src.get("utc_offset"), os="linux", host=host, type="network",
-                         action="allow" if m["act"] == "ALLOW" else "block", proto=m["proto"].lower(), src_ip=m["src"],
+                         action="allow" if m["act"] == "ALLOW" else "block", outcome="success" if m["act"] == "ALLOW" else "failure",
+                         proto=m["proto"].lower(), src_ip=m["src"],
                          dst_ip=m["dst"], src_port=_int(m["spt"]), dst_port=_int(m["dpt"]),
                          direction="inbound" if m["in"] and not m["out"] else "outbound" if m["out"] and not m["in"] else None)
 
@@ -389,19 +391,22 @@ PARSERS = {"windows_events": parse_windows_events, "windows_firewall": parse_win
 
 
 def read_all(sources: list[dict], folder: Path) -> tuple[list[dict], list[dict]]:
-    """Parse every source in sources.yaml. Returns (events sorted by time, one stats dict per source)."""
+    """Parse every source in sources.yaml through the agent that owns its format (soc/agents/).
+    Returns (events sorted by time, one stats dict per source)."""
+    from .agents import all_parsers, owner_of   # late import: the agents import the parse functions from this module
+    parsers = {**PARSERS, **all_parsers()}
     events, all_stats = [], []
     for src in sources:
-        stats = {"source": src["name"], "parser": src["parser"], "host": src.get("host"), "events": 0, "skipped": 0, "errors": 0,
-                 "missing": False, "times": []}
+        stats = {"source": src["name"], "parser": src["parser"], "agent": owner_of(src["parser"]), "host": src.get("host"),
+                 "events": 0, "skipped": 0, "errors": 0, "missing": False, "times": []}
         path = Path(folder) / src["path"]
-        if src["parser"] not in PARSERS:
+        if src["parser"] not in parsers:
             stats["errors"] += 1
             stats["note"] = f"no parser named '{src['parser']}'"
         elif not path.exists():
             stats["missing"] = True
         else:
-            for ev in PARSERS[src["parser"]](path, src, stats):
+            for ev in parsers[src["parser"]](path, src, stats):
                 if not ev.get("host"):
                     ev["host"] = src.get("host")
                 events.append(ev)

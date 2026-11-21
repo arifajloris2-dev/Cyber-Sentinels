@@ -19,6 +19,7 @@ def write(r: dict, out: Path) -> str:
     out.mkdir(parents=True, exist_ok=True)
     (out / "incidents.json").write_text(_j(r["incidents"]), encoding="utf-8")
     (out / "intel.json").write_text(_j(r.get("intel", {})), encoding="utf-8")
+    (out / "agents.json").write_text(_j(r.get("agents", [])), encoding="utf-8")
     (out / "alerts.json").write_text(_j(r["alerts"]), encoding="utf-8")
     (out / "suppressed.json").write_text(_j({"tickets": r["maintenance"], "alerts": r["suppressed"]}), encoding="utf-8")
     (out / "health.json").write_text(_j({"sources": r["health"], "parsing": [{k: v for k, v in s.items() if k != "times"} for s in r["stats"]]}),
@@ -61,6 +62,19 @@ def markdown(r: dict) -> str:
         if unused:
             L.append(f"- Findings with no matching activity in these logs: {', '.join(unused)}")
         L += [f"- Source: `{Path(intel['source']).name}`" if intel.get("source") else "- Source: none", ""]
+    if r.get("agents"):
+        L += ["## What each agent saw (after the baseline)", ""]
+        for a in r["agents"]:
+            change = a["today"]["change_pct"]
+            trend = f", {'+' if change and change > 0 else ''}{change}% vs normal" if change is not None else ""
+            L += [f"**{a['title']}** · {len(a['sources'])} log source(s) on {a['hosts']} host(s) · "
+                  f"{a['events_today']:,} events ({a['today']['per_hour']}/h; normal {a['normal']['per_hour']}/h{trend}) · "
+                  f"{a['maintenance_filtered']} approved-maintenance events set aside · {a['alerts']} alert(s)"
+                  + (f" → {', '.join(a['incidents'])}" if a["incidents"] else "")]
+            L += [f"- {h}" for h in a["highlights"]]
+            if a["silent_sources"]:
+                L.append(f"- silent: {', '.join(a['silent_sources'])}")
+            L.append("")
     L += ["## Approved maintenance recognised", ""]
     L += [f"- **{m['ticket']}** {m['title']}: {m['events']} events on {', '.join(m['hosts'])}, "
           f"{len(m['alerts_suppressed'])} alert(s) suppressed" for m in r["maintenance"]] or ["- none"]

@@ -121,3 +121,15 @@ def test_admin_psexec_under_ticket_and_helpdesk_group_change_stay_quiet(fleet):
     truth, r = fleet
     quiet = set(truth["lines"]["psexec-change"]) | set(truth["lines"]["B6"])
     assert not {e["id"] for a in r["alerts"] for e in a["evidence"]} & quiet
+
+
+def test_each_agent_reports_what_it_saw_on_the_50_device_base(fleet):
+    truth, r = fleet
+    by = {a["agent"]: a for a in r["agents"]}
+    assert set(by) == {"windows_host", "endpoint", "linux_host", "host_firewall", "perimeter", "network_sensor", "mail"}
+    fw = " ".join(by["host_firewall"]["highlights"])
+    assert "NEW kinds" in fw and "DC-02 -> FS-01:445" in fw and "WS-BASE-014 -> srv-gate-ctrl-01:22" in fw
+    assert "486 MB" in " ".join(by["network_sensor"]["highlights"])
+    assert "LSASS" in " ".join(by["endpoint"]["highlights"])
+    assert by["host_firewall"]["silent_sources"] == [truth["silent_source"]["source"]]
+    assert all(a["incidents"] for a in by.values())
