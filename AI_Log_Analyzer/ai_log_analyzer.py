@@ -374,11 +374,46 @@ def strip_think(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
+def _shorten(text: str, limit: int) -> str:
+    """Cut text to at most `limit` characters at a sentence or word boundary, ending with an ellipsis."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    for mark in (". ", "; ", ", ", " "):
+        at = cut.rfind(mark)
+        if at >= limit // 2:
+            cut = cut[: at + (1 if mark == ". " else 0)]
+            break
+    return cut.rstrip(" ,;") + "…"
+
+
+def fit_lengths(data: Any) -> Any:
+    """The local model often writes a little more than the format allows (Ollama does not enforce maxLength or
+    maxItems). Shorten those parts instead of throwing away an otherwise valid explanation."""
+    if not isinstance(data, dict):
+        return data
+    for key, spec in RESULT_SCHEMA["properties"].items():
+        value = data.get(key)
+        if spec.get("type") == "string" and isinstance(value, str) and "maxLength" in spec:
+            if len(value) > spec["maxLength"]:
+                log.warning("Shortening %s from %d to %d characters", key, len(value), spec["maxLength"])
+                data[key] = _shorten(value, spec["maxLength"])
+        elif spec.get("type") == "array" and isinstance(value, list):
+            if key == "evidence":
+                value = list(dict.fromkeys(value))          # the same ID twice is still one citation
+            value = value[: spec.get("maxItems", len(value))]
+            limit = spec.get("items", {}).get("maxLength")
+            if limit:
+                value = [_shorten(v, limit) if isinstance(v, str) else v for v in value]
+            data[key] = value
+    return data
+
+
 def validate_response(raw: str, valid_ids: set[str]) -> dict[str, Any]:
-    """Parse, schema-check, and drop evidence IDs that are not in the incident."""
+    """Parse, shorten over-long parts, schema-check, and drop evidence IDs that are not in the incident."""
     text = strip_think(raw)
     try:
-        data = json.loads(text)
+        data = fit_lengths(json.loads(text))
     except json.JSONDecodeError as exc:
         raise ValueError(f"Response is not valid JSON: {exc}") from exc
 

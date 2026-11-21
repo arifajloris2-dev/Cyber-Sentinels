@@ -141,3 +141,18 @@ def test_answer_format_only_allows_the_incidents_own_evidence_ids():
     assert items["enum"] == ["E1", "E2"]
     assert "enum" not in RESULT_SCHEMA["properties"]["evidence"]["items"]   # the shared schema is not changed
     assert payload["options"]["num_ctx"] >= 8192
+
+
+def test_over_long_answer_is_shortened_not_rejected():
+    from AI_Log_Analyzer.ai_log_analyzer import validate_response
+    raw = json.dumps({
+        "summary": "A night-shift operator logged on from an unknown address. " * 8,   # far over 240 characters
+        "commander_summary_en": "Short.",
+        "triage_assessment": "likely_suspicious",
+        "evidence": ["E1", "E1", "E2"],
+        "uncertainty": "Not confirmed with the account owner.",
+        "recommendations": ["Ask the owner.", "Check the server.", "A third one the format does not allow."],
+    })
+    data = validate_response(raw, {"E1", "E2"})
+    assert len(data["summary"]) <= 240 and data["summary"].endswith("…")
+    assert data["evidence"] == ["E1", "E2"] and len(data["recommendations"]) == 2

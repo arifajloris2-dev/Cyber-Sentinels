@@ -537,8 +537,9 @@ class DashboardPage:
                     "text-sm"
                 ).style(f"color:{COLORS['muted']}")
             for finding in findings[:8]:
-                kind = str(finding.get("type", "threat finding"))
-                is_vulnerability = kind == "vulnerability_exposure"
+                # the OSINT agent writes finding_type (older output: type)
+                kind = str(finding.get("finding_type") or finding.get("type") or "threat finding")
+                is_vulnerability = kind == "vulnerability_exposure" or (bool(finding.get("cve")) and not finding.get("account"))
                 title = (
                     str(finding.get("cve", "Vulnerability exposure"))
                     if is_vulnerability
@@ -717,7 +718,9 @@ class DashboardPage:
                 )
             if error:
                 ui.label(error).classes("text-xs").style(f"color:{COLORS['amber']}")
-        if self._qwen_config_is_verified() and incident_id not in self.qwen_in_flight:
+        # Start automatically only once per incident. After an error, wait for "Regenerate explanation": starting
+        # again here cleared the error and retried forever, so the operator only ever saw "Generating…".
+        if self._qwen_config_is_verified() and not error and incident_id not in self.qwen_in_flight:
             asyncio.create_task(self._generate_explanation(incident))
 
     def _explanation_section(self, title: str, text: str) -> None:
@@ -815,9 +818,11 @@ class DashboardPage:
                 base_url,
                 model,
             )
-        except (AnalysisError, OllamaError, ValueError) as exc:
+        except Exception as exc:  # any failure must reach the screen, never leave "Generating…" behind
             log.exception("Qwen incident explanation failed")
-            self.qwen_errors[incident_id] = f"Qwen unavailable: {exc}"
+            reason = str(exc).split(": ", 1)[-1] if isinstance(exc, AnalysisError) else str(exc)
+            self.qwen_errors[incident_id] = f"Qwen could not explain this incident ({reason[:200]}). " \
+                                            "The deterministic overview is shown; use Regenerate explanation to retry."
         else:
             self.qwen_results[incident_id] = (result, evidence_refs)
         finally:
@@ -843,7 +848,7 @@ class DashboardPage:
             base_url=base_url,
             model=model,
             timeout=240,
-            retries=0,
+            retries=1,  # one retry with the validation error fed back to the model
         )
         return result, evidence_refs
 
