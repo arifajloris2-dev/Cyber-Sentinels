@@ -11,6 +11,7 @@ from typing import Protocol
 from backend.soc.pipeline import run
 from backend.osint_agent import run_osint_agent
 
+from . import cache
 from .models import DashboardSnapshot
 
 
@@ -34,7 +35,15 @@ class SocPipelineProvider:
         self.log_dir = log_dir
 
     def load(self) -> DashboardSnapshot:
-        result = run(self.log_dir)
+        # reuse the saved analysis while logs, rules, knowledge and engine code are unchanged (frontend/cache.py)
+        result = cache.load_engine(self.log_dir)
+        self.from_cache = result is not None
+        if result is None:
+            result = run(self.log_dir)
+            try:
+                cache.save_engine(self.log_dir, result)
+            except OSError:
+                pass                                  # a read-only folder just means no cache
         return DashboardSnapshot.from_mapping(
             {
                 "generated_at": datetime.now(timezone.utc),

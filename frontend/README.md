@@ -130,3 +130,20 @@ incident at runtime. Provider exceptions are shown to the operator rather than s
 $env:PYTHONPATH = "backend"
 python -m pytest frontend/tests AI_Log_Analyzer/test_validation.py backend/soc/tests -q
 ```
+
+## Prepare a demo (precomputed results)
+
+The synthetic logs are deterministic, so the analysis and the AI explanations can be prepared once:
+
+```powershell
+python -m frontend.precompute --logs backend/soc/fleet/logs            # all incidents (~1-2 min each on a laptop CPU)
+python -m frontend.precompute --logs backend/soc/fleet/logs --only P1  # only priority 1
+python -m frontend.precompute --logs backend/soc/fleet/logs --no-ai    # only the engine analysis
+```
+
+Results are saved in `<logs>/out/` (`engine_cache.json.gz`, `ai_explanations.json`, not in git). The dashboard then
+opens in about a second and shows every prepared explanation instantly, labelled "Prepared in advance … with
+<model>". Each saved item carries a fingerprint: the engine cache of the log files, rules, imported knowledge and
+engine code; each AI explanation of the exact prompt (incident, evidence, intel, source health) and the model. When
+anything changes, the stale item is ignored and the result is computed live. "Regenerate explanation" always asks
+the AI live and saves the new answer. The caches are plain JSON: loading them can never run code.

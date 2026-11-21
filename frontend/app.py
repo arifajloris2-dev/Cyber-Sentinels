@@ -23,10 +23,10 @@ from AI_Log_Analyzer.ai_log_analyzer import (
     AnalysisError,
     OllamaError,
     analyze_incident,
-    build_dashboard_incident,
     check_ollama_model,
 )
 from backend.soc import knowledge as kb_store
+from frontend import cache as result_cache
 from frontend import search as event_search
 from frontend.data_provider import CsvSimulationProvider, DashboardProvider, IntegratedAgentProvider
 from frontend.explanations import instant_overview, plain_alert_explanation
@@ -227,6 +227,9 @@ class DashboardPage:
         self.priority_filter = "All"
         self.incident_query = ""
         self.search_results: list[Record] = []
+        # explanations prepared in advance (python -m frontend.precompute) are shown instantly
+        self.ai_cache = result_cache.AiCache(getattr(provider, "log_dir", None))
+        self.ai_meta: dict[str, dict] = {}
         self.ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
         self.ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
         self._build()
@@ -1370,8 +1373,24 @@ class DashboardPage:
             return False
 
     # =================================================================== AI explanation (unchanged logic)
+    def _use_saved_explanation(self, incident: Record) -> None:
+        """Take a prepared explanation when its fingerprint matches what the AI would see now."""
+        iid = str(incident.get("id", "incident"))
+        store = getattr(self, "ai_cache", None)
+        if store is None or iid in self.qwen_results or self.snapshot is None or getattr(self, "_regenerating", None) == iid:
+            return
+        try:
+            payload, refs = result_cache.ai_payload(incident, self.snapshot)
+            item = store.get(result_cache.ai_fingerprint(payload, str(self.model_input.value or "").strip()))
+        except Exception:                          # a broken cache entry must never break the page
+            return
+        if item:
+            self.qwen_results[iid] = (item["result"], item.get("evidence_refs") or refs)
+            self.ai_meta[iid] = item
+
     def _render_explanation(self, incident: Record) -> None:
         incident_id = str(incident.get("id", "incident"))
+        self._use_saved_explanation(incident)
         self.explanation_container.clear()
         result_refs = self.qwen_results.get(incident_id)
         error = self.qwen_errors.get(incident_id)
@@ -1384,7 +1403,12 @@ class DashboardPage:
             label, background, foreground = labels.get(assessment, labels["inconclusive"])
             self.ai_assessment.set_text(label)
             self.ai_assessment.style(f"background-color:{background} !important;color:{foreground} !important")
-            self.ai_status.set_text("Qwen3 summary ready · the operator decides")
+            meta = getattr(self, "ai_meta", {}).get(incident_id)
+            if meta:
+                self.ai_status.set_text(f"Prepared in advance on {_when(meta.get('created'), '%d %b %H:%M UTC')} with "
+                                        f"{meta.get('model')} (took {meta.get('seconds')} s) · same evidence as now · the operator decides")
+            else:
+                self.ai_status.set_text("Qwen3 summary ready (generated live) · the operator decides")
             with self.explanation_container:
                 ui.label(_text(result.get("commander_summary_en"), _text(result.get("summary")))).classes(
                     "soc-explanation-text text-sm whitespace-pre-wrap")
@@ -1501,6 +1525,7 @@ class DashboardPage:
         base_url = str(self.url_input.value or "").strip()
         model = str(self.model_input.value or "").strip()
         self.qwen_errors.pop(incident_id, None)
+        started = asyncio.get_event_loop().time()
         try:
             result, evidence_refs = await asyncio.to_thread(self._analyze_incident, incident, snapshot, base_url, model)
         except Exception as exc:  # any failure must reach the screen, never leave "Generating…" behind
@@ -1510,6 +1535,17 @@ class DashboardPage:
                                             "The deterministic overview is shown; use Regenerate explanation to retry."
         else:
             self.qwen_results[incident_id] = (result, evidence_refs)
+            getattr(self, "ai_meta", {}).pop(incident_id, None)
+            if getattr(self, "_regenerating", None) == incident_id:
+                self._regenerating = None
+            store = getattr(self, "ai_cache", None)
+            if store is not None:              # keep it for next time (same evidence = same explanation)
+                try:
+                    payload, _ = result_cache.ai_payload(incident, snapshot)
+                    store.put(result_cache.ai_fingerprint(payload, model), incident_id, model, result, evidence_refs,
+                              asyncio.get_event_loop().time() - started)
+                except Exception:
+                    log.exception("Could not save the explanation")
         finally:
             self.qwen_in_flight.discard(incident_id)
             if not self._client.is_deleted and self.selected_incident_id == incident_id:
@@ -1517,11 +1553,7 @@ class DashboardPage:
 
     @staticmethod
     def _analyze_incident(incident: Record, snapshot: DashboardSnapshot, base_url: str, model: str) -> tuple[Record, dict[str, str]]:
-        iid = str(incident.get("id"))
-        # the AI sees the knowledge that matters for THIS incident first, then the operator's newest imports
-        findings = sorted(snapshot.threat_findings, key=lambda f: (iid not in (f.get("matched_incidents") or []),
-                                                                   not str(f.get("id", "")).startswith("KB-")))
-        payload, evidence_refs = build_dashboard_incident(incident, findings, snapshot.sources, snapshot.advisories)
+        payload, evidence_refs = result_cache.ai_payload(incident, snapshot)   # same payload as the precompute command
         result = analyze_incident(payload, base_url=base_url, model=model, timeout=240, retries=1)
         return result, evidence_refs
 
@@ -1537,6 +1569,8 @@ class DashboardPage:
             return
         self.qwen_results.pop(self.selected_incident_id, None)
         self.qwen_errors.pop(self.selected_incident_id, None)
+        getattr(self, "ai_meta", {}).pop(self.selected_incident_id, None)
+        self._regenerating = self.selected_incident_id      # skip the saved explanation: ask the AI live
         await self._generate_explanation(incident)
 
     def _source_warning(self, source: Record) -> str:
