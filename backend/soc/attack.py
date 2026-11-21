@@ -11,6 +11,7 @@ TECHNIQUES = {
     "T1021": ("Remote Services", "Lateral Movement"),
     "T1046": ("Network Service Discovery", "Discovery"),
     "T1053.005": ("Scheduled Task/Job: Scheduled Task", "Persistence"),
+    "T1498": ("Network Denial of Service", "Impact"),
     "T1136.001": ("Create Account: Local Account", "Persistence"),
     "T1543.002": ("Create or Modify System Process: Systemd Service", "Persistence"),
     "T1543.003": ("Create or Modify System Process: Windows Service", "Persistence"),

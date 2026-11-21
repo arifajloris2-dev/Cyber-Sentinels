@@ -58,8 +58,9 @@ def main(argv=None):
         print(f"\nWritten: {out / 'report.md'}, incidents.json, alerts.json, suppressed.json, health.json")
     elif a.cmd == "replay":
         for x in replay(Path(a.folder)):
-            print(f"{x['incident']}: flagged {x['minutes_after_last_event']} min after its last event "
-                  f"({x['last_event']:%H:%M:%S} → {x['flagged_at']:%H:%M:%S} UTC)")
+            title = x["incident"].replace("\u2192", "->")
+            print(f"{title}: flagged {x['minutes_after_last_event']} min after its last event "
+                  f"({x['last_event']:%H:%M:%S} -> {x['flagged_at']:%H:%M:%S} UTC)")
 
 
 if __name__ == "__main__":

@@ -1,35 +1,59 @@
-# Cyber Sentinels desktop dashboard
+# Cyber Sentinels dashboard
 
-The dashboard is a local Python desktop application (Tkinter), not a web page or web server. It runs the
-deterministic SOC pipeline against local log files and displays prioritized incidents, their evidence timeline,
-MITRE ATT&CK mapping, source health, and operator-directed verification checks. It does not take response actions.
+The dashboard is a local browser UI built with NiceGUI. It runs the deterministic SOC pipeline against local logs
+and displays prioritized incidents, their evidence timeline, MITRE ATT&CK mapping, source health, Member 1 threat
+intelligence findings and targeted hunts, and operator-directed verification checks. It does not take response
+actions.
 
 ## Run
 
-From the project root, install the SOC dependencies once and launch the app:
+From the project root, install the project dependencies and launch the app:
 
 ```powershell
-python -m pip install -r backend/soc/requirements.txt
-python -m pip install -r AI_Log_Analyzer/requirements.txt
+python -m pip install -r requirements.txt
 python -m frontend
 ```
 
-By default, the dashboard uses `backend/soc/sample_logs`. To use another local collection, pass its directory:
+The dashboard opens at `http://127.0.0.1:8080` and remains on this computer by default. The responsive layout
+adapts to desktop, tablet, and phone-sized browser windows.
+
+To access it from another device on a trusted LAN, use `python -m frontend --host 0.0.0.0`. The dashboard has no
+login; restrict access with your firewall and never port-forward it to the Internet.
+
+By default, the dashboard uses the 50-device synthetic scenario in `backend/soc/fleet/logs`. It generates the
+scenario on first launch if needed, then opens the incidents, benign activity, maintenance, and source-health
+results in the dashboard. To use another local collection, pass its directory:
 
 ```powershell
 python -m frontend --logs C:\path\to\collected-logs
 ```
 
 The directory must include `sources.yaml`, `assets.yaml`, and `maintenance.yaml` alongside the configured log files.
-The app stays on the desktop and processes the files locally.
+
+To stream a network-attack CSV as if it were live telemetry:
+
+```powershell
+python -m frontend --csv C:\path\to\cybersecurity_attacks.csv --csv-batch 30 --csv-interval 2
+```
+
+The simulator processes a small batch at a time, keeps a rolling window of recent telemetry, runs the same
+deterministic SOC engine, and compares detections with the CSV `Attack Type` column. The replay clock advances
+quickly so bursts can be tested, and the CSV repeats automatically when it reaches the end. Traffic from many
+distinct sources to one asset can trigger the `NET-004` possible-bot-swarm rule. Detected activity appears in the
+dashboard's paginated Alerts history. Cached OSINT vulnerability and credential findings are used as incident
+context; they do not by themselves confirm an incident. No automatic response action is used.
+
+The downloaded 40,000-row cybersecurity-attacks dataset is located at
+`simulation/cybersecurity_attacks/cybersecurity_attacks.csv`.
 
 ## Automatic local Qwen3 summaries
 
-When an incident is selected, the dashboard immediately shows a deterministic overview and automatically asks the
-local Ollama runtime for a concise advisory summary in the background. The Qwen3 result includes a tentative triage
-opinion (`likely suspicious`, `possibly authorized/benign`, or `inconclusive`), cited evidence groups, uncertainty,
-and up to two operator verification checks. CPU inference may take time; the UI remains usable and shows the
-deterministic overview while Qwen3 works. A **Regenerate** control retries the selected incident's summary.
+When an incident is selected, one explanation panel shows a deterministic plain-language fallback while the
+dashboard asks the local Ollama runtime for an advisory summary in the background. The Qwen3 result includes a
+tentative triage opinion (`likely suspicious`, `possibly authorized/benign`, or `inconclusive`), cited evidence
+groups, uncertainty, and up to two operator verification checks. CPU inference may take time; the dashboard remains
+usable. Use **Test Qwen** to see whether the configured endpoint is reachable and whether the selected model exists.
+The endpoint and model can be edited in the dashboard, and **Regenerate explanation** retries the selected incident.
 
 The model does not detect attacks, change incident priority, close alerts, or take response actions. The operator
 makes the decision. Raw source logs are hidden from the main dashboard and can be opened on demand with **View
@@ -42,9 +66,9 @@ ollama pull qwen3:4b
 ollama serve
 ```
 
-By default, the dashboard uses `127.0.0.1:11434`. To use a Qwen3 host on the same trusted LAN, set `OLLAMA_URL`
-on the client to its private IP. The analyzer accepts loopback and private LAN IPs only; public addresses and
-hostnames are rejected.
+By default, the dashboard uses `http://127.0.0.1:11434`. The AI status in the UI reports the endpoint, model, and
+specific connection error. To use a Qwen3 host on the same trusted LAN, set `OLLAMA_URL` on the client to its private
+IP. The analyzer accepts loopback and private LAN IPs only; public addresses and hostnames are rejected.
 
 On the Windows host, set Ollama to listen on the LAN and restart it:
 
@@ -81,12 +105,15 @@ The UI consumes `DashboardSnapshot` from `frontend/models.py`. A provider implem
 - `incidents`: correlated SOC incidents with alerts/evidence, hosts, ATT&CK techniques, confidence, links, and checks
 - `sources`: per-source health records (`source`, `host`, `events`, `ok`, and optional `silent` gaps)
 - `alerts`, `singles`, `maintenance`: SOC alert and approved-maintenance results
-- `threat_findings` (optional): Member 1 OSINT findings, each with a `title` or `id`
+- `threat_findings` (optional): Member 1 vulnerability and credential exposure findings
+- `hunt_requests` (optional): Member 1 targeted investigations handed to Member 2
 - `advisories` (optional): map of incident ID to Member 3 briefing (`explanation`, optional `recommendations`)
 
-The current `SocPipelineProvider` adapts Member 2's `backend.soc.pipeline.run()` output. When another member's
-module is ready, add or update a provider adapter to map its output to this contract; the UI remains independent of
-agent implementation details. Provider exceptions are shown to the operator rather than silently ignored.
+The `SocPipelineProvider` adapts Member 2's `backend.soc.pipeline.run()` output. `IntegratedAgentProvider`
+combines it with Member 1's `backend.osint_agent.run_osint_agent()` vulnerability and credential findings, plus
+targeted hunt requests. The dashboard launcher uses the integrated provider by default. Member 1 findings are shown
+as intelligence context, not as confirmed incidents. Member 3 local Qwen3 summaries are requested for the selected
+incident at runtime. Provider exceptions are shown to the operator rather than silently ignored.
 
 ## Project guardrails
 
@@ -94,6 +121,7 @@ agent implementation details. Provider exceptions are shown to the operator rath
 - Approved patching and backup activity stays suppressed by the SOC maintenance rules.
 - Incident timelines summarize evidence by default; original log lines remain available on demand.
 - Missing log sources remain visible and lower incident confidence rather than hiding detection results.
+- Source health is color-coded: healthy is green, warnings are amber, and silent sources are red; silence durations show hours and remaining minutes.
 - The engine remains advisory-only: there are no automatic changes or response actions on monitored systems.
 - Keep the SOC regression tests green for the under-10-minute flagging target, low false-incident rate, cross-source
   correlation, missing-source behavior, and local performance:

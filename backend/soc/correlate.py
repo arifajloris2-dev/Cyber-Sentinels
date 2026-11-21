@@ -14,6 +14,13 @@ from .health import silent_between
 
 LINK_WINDOW = timedelta(minutes=60)
 WEAK = 5   # alerts below this severity link only through a shared account or unknown address, never "same host" alone
+CRITICALITY_LEVELS = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _criticality_rank(value) -> int:
+    if isinstance(value, (int, float)):
+        return min(4, max(1, int(value)))
+    return CRITICALITY_LEVELS.get(str(value).lower(), 1)
 
 
 def link_reason(a: dict, b: dict) -> str | None:
@@ -82,11 +89,17 @@ def correlate(alerts: list[dict], assets: dict, health: list[dict], end: datetim
         stages = [s for s in STAGES if any(a["stage"] == s for a in members)]
         techniques = list(dict.fromkeys(t for a in members for t in a["attack"]))
         start, stop = members[0]["time"], max(a["time_end"] for a in members)
-        crit = max([known[h.lower()].get("criticality", 1) for h in hosts] or [1])
+        crit = max([_criticality_rank(known[h.lower()].get("criticality", "medium")) for h in hosts] or [1])
         score = sum(a["severity"] for a in members) + 5 * len(stages) + 3 * crit + (10 if len(hosts) > 1 else 0)
         conf, why = _confidence(members, hosts, health, start, stop)
         impact = sorted({h for a in members if a["stage"] == "impact" for h in a["hosts"] if h.lower() in known})
         title = _title(members, stages, impact)
+        if any(alert["rule"] == "NET-004" for alert in members):
+            target = next(
+                (host for alert in members if alert["rule"] == "NET-004" for host in alert["hosts"]),
+                "protected system",
+            )
+            title = f"Possible bot swarm targeting {target}"
         my_links = [l for l in links if l["from"] in ids]
         incidents.append({
             "id": f"INC-{start:%Y%m%d-%H%M}", "priority": "P1" if score >= 70 else "P2" if score >= 35 else "P3", "score": score,

@@ -1,22 +1,33 @@
-"""Local desktop incident dashboard. Run with ``python -m frontend``."""
+"""NiceGUI dashboard for the local Cyber Sentinels SOC."""
 from __future__ import annotations
 
 import argparse
+import asyncio
+import logging
+import os
+import re
+import subprocess
 import sys
-import threading
-import tkinter as tk
 from datetime import datetime, timezone
 from pathlib import Path
-from tkinter import ttk
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+from nicegui import ui
 
-from frontend.data_provider import DashboardProvider, SocPipelineProvider
+from AI_Log_Analyzer.ai_log_analyzer import (
+    AnalysisError,
+    OllamaError,
+    analyze_incident,
+    build_dashboard_incident,
+    check_ollama_model,
+)
+from frontend.data_provider import CsvSimulationProvider, DashboardProvider, IntegratedAgentProvider
+from frontend.explanations import instant_overview, plain_alert_explanation
 from frontend.models import DashboardSnapshot, Record
 
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_LOGS = ROOT / "backend" / "soc" / "fleet" / "logs"
+FLEET_GENERATOR = ROOT / "backend" / "soc" / "fleet" / "make_fleet.py"
 COLORS = {
     "background": "#f2f5f9",
     "surface": "#ffffff",
@@ -26,16 +37,21 @@ COLORS = {
     "navy": "#142c44",
     "navy_light": "#203f5b",
     "teal": "#119879",
-    "teal_pale": "#e6f5f0",
     "blue": "#3473d1",
-    "blue_pale": "#eaf1fc",
     "amber": "#a85d00",
-    "amber_pale": "#fff3df",
     "red": "#b9364d",
-    "red_pale": "#fdecef",
     "green": "#23774d",
-    "green_pale": "#e8f5ed",
 }
+log = logging.getLogger(__name__)
+
+
+def _ensure_default_fleet_logs(log_path: Path) -> None:
+    if log_path.resolve() == DEFAULT_LOGS.resolve() and not (log_path / "sources.yaml").is_file():
+        subprocess.run(
+            [sys.executable, str(FLEET_GENERATOR), "--no-ecs"],
+            cwd=ROOT,
+            check=True,
+        )
 
 
 def _text(value: Any, default: str = "—") -> str:
@@ -57,553 +73,804 @@ def _when(value: Any, fmt: str = "%Y-%m-%d %H:%M UTC") -> str:
     return result.astimezone(timezone.utc).strftime(fmt)
 
 
-def instant_overview(incident: Record) -> str:
-    """Create an immediate, rule-derived overview while the local model is working."""
-    hosts = [str(host.get("host", "unknown host")) for host in incident.get("hosts", [])]
-    stages = " → ".join(str(stage) for stage in incident.get("stages", [])) or "correlated activity"
-    assets = ", ".join(hosts) if hosts else "asset mapping unavailable"
-    return (
-        f"{incident.get('priority', 'Unranked')} incident: {incident.get('title', 'Correlated activity')}. "
-        f"The deterministic SOC engine linked {len(incident.get('alerts', []))} alert(s) across "
-        f"{assets}. Observed path: {stages}. "
-        "Qwen3 is preparing a separate advisory summary; it will not change this detection."
-    )
+def _priority(severity: Any) -> str:
+    try:
+        score = int(severity)
+    except (TypeError, ValueError):
+        return "P3"
+    return "P1" if score >= 8 else "P2" if score >= 5 else "P3"
 
 
-class DashboardApp:
-    def __init__(self, root: tk.Tk, provider: DashboardProvider) -> None:
-        self.root = root
+def _number(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_elapsed_minutes(value: int | float) -> str:
+    minutes = max(0, int(value))
+    hours, remainder = divmod(minutes, 60)
+    if hours and remainder:
+        return f"{hours}h {remainder}m"
+    if hours:
+        return f"{hours}h"
+    return f"{remainder}m"
+
+
+def _priority_colors(priority: str) -> tuple[str, str]:
+    return {
+        "P1": ("#fdecef", COLORS["red"]),
+        "P2": ("#fff3df", COLORS["amber"]),
+        "P3": ("#eaf1fc", COLORS["blue"]),
+    }.get(priority, ("#eaf1fc", COLORS["blue"]))
+
+
+class DashboardPage:
+    def __init__(self, provider: DashboardProvider, refresh_seconds: int | None) -> None:
+        self._client = ui.context.client
         self.provider = provider
+        self.refresh_seconds = refresh_seconds
         self.snapshot: DashboardSnapshot | None = None
         self.incidents: list[Record] = []
-        self._selected_index: int | None = None
-        self._snapshot_generation = 0
-        self._ai_request: tuple[int, str] | None = None
-        self._local_ai_ready = False
-        self._local_ai_message = "Checking local Qwen3…"
-        self.ai_explanations: dict[str, Record] = {}
-        self.ai_errors: dict[str, str] = {}
+        self.selected_incident_id: str | None = None
+        self.loading = False
+        self.qwen_ready = False
+        self.qwen_checking = False
+        self.qwen_message = "Checking local Qwen3…"
+        self.checked_qwen_config: tuple[str, str] | None = None
+        self.qwen_results: dict[str, tuple[Record, dict[str, str]]] = {}
+        self.qwen_errors: dict[str, str] = {}
+        self.qwen_in_flight: set[str] = set()
+        self.alert_history: list[Record] = []
+        self.alert_fingerprints: set[tuple[Any, ...]] = set()
+        self.ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+        self.ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
         self._build()
-        self.refresh()
-        threading.Thread(target=self._check_local_ai_in_background, daemon=True).start()
+        ui.timer(0.1, self.refresh, once=True)
+        if self.refresh_seconds is not None:
+            ui.timer(self.refresh_seconds, self.refresh)
+        ui.timer(0.2, self.test_qwen, once=True)
 
     def _build(self) -> None:
-        self.root.title("Cyber Sentinels | Incident Operations")
-        self.root.geometry("1480x920")
-        self.root.minsize(1120, 740)
-        self.root.configure(bg=COLORS["background"])
-        self._configure_styles()
-
-        shell = tk.Frame(self.root, bg=COLORS["background"])
-        shell.pack(fill="both", expand=True, padx=24, pady=20)
-
-        self._build_header(shell)
-        self._build_metrics(shell)
-
-        workspace = tk.Frame(shell, bg=COLORS["background"])
-        workspace.pack(fill="both", expand=True, pady=(18, 12))
-        workspace.columnconfigure(0, weight=4)
-        workspace.columnconfigure(1, weight=7)
-        workspace.rowconfigure(0, weight=1)
-
-        left = tk.Frame(workspace, bg=COLORS["background"])
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 9))
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(0, weight=3)
-        left.rowconfigure(1, weight=2)
-        self._build_incident_queue(left)
-        self._build_sources(left)
-
-        right = tk.Frame(workspace, bg=COLORS["background"])
-        right.grid(row=0, column=1, sticky="nsew", padx=(9, 0))
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(3, weight=1)
-        self._build_incident_overview(right)
-        self._build_attack_path(right)
-        self._build_ai_summary(right)
-        self._build_timeline(right)
-
-        self.agent_status_var = tk.StringVar(value="OSINT pending   ·   Member 3 pending")
-        self.status_var = tk.StringVar(value="Starting local dashboard…")
-        footer = tk.Frame(shell, bg=COLORS["background"])
-        footer.pack(fill="x")
-        tk.Label(
-            footer,
-            textvariable=self.agent_status_var,
-            bg=COLORS["background"],
-            fg=COLORS["muted"],
-            anchor="w",
-            font=("Segoe UI", 9),
-        ).pack(side="left", fill="x", expand=True)
-        tk.Label(
-            footer,
-            textvariable=self.status_var,
-            bg=COLORS["background"],
-            fg=COLORS["muted"],
-            anchor="e",
-            font=("Segoe UI", 9),
-        ).pack(side="right")
-
-    def _configure_styles(self) -> None:
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure(
-            "Treeview",
-            background=COLORS["surface"],
-            fieldbackground=COLORS["surface"],
-            foreground=COLORS["ink"],
-            borderwidth=0,
-            rowheight=34,
-            font=("Segoe UI", 10),
+        ui.page_title("Cyber Sentinels | Incident Operations")
+        ui.add_head_html(
+            """
+            <style>
+              body { background: #f2f5f9; color: #142235; }
+              .soc-shell { max-width: 1480px; margin: 0 auto; }
+              .soc-card { border: 1px solid #dce4ed; border-radius: 16px; box-shadow: 0 2px 6px #1422350b; }
+              .soc-workspace { display: grid; grid-template-columns: minmax(290px, 4fr) minmax(0, 7fr); gap: 18px; align-items: start; }
+              .soc-metric { flex: 1 1 175px; min-width: 155px; }
+              .soc-source-table .q-table__middle { max-height: 240px; overflow-y: auto; }
+              .soc-source-table .q-table thead tr th { position: sticky; top: 0; z-index: 1; background: white; }
+              .soc-explanation-text { overflow-wrap: anywhere; }
+              @media (max-width: 980px) { .soc-workspace { grid-template-columns: 1fr; } }
+            </style>
+            """
         )
-        style.configure(
-            "Treeview.Heading",
-            background="#f5f7fa",
-            foreground=COLORS["muted"],
-            relief="flat",
-            font=("Segoe UI", 9, "bold"),
-        )
-        style.map(
-            "Treeview",
-            background=[("selected", COLORS["blue_pale"])],
-            foreground=[("selected", COLORS["ink"])],
-        )
-        style.configure(
-            "Vertical.TScrollbar",
-            background="#e6ebf1",
-            troughcolor=COLORS["surface"],
-            bordercolor=COLORS["surface"],
-            arrowcolor=COLORS["muted"],
-        )
-
-    def _card(self, parent: tk.Widget, title: str) -> tuple[tk.Frame, tk.Frame]:
-        card = tk.Frame(
-            parent,
-            bg=COLORS["surface"],
-            highlightbackground=COLORS["border"],
-            highlightthickness=1,
-        )
-        card.columnconfigure(0, weight=1)
-        card.rowconfigure(1, weight=1)
-        tk.Label(
-            card,
-            text=title,
-            bg=COLORS["surface"],
-            fg=COLORS["muted"],
-            anchor="w",
-            font=("Segoe UI", 9, "bold"),
-        ).grid(row=0, column=0, sticky="ew", padx=15, pady=(12, 8))
-        body = tk.Frame(card, bg=COLORS["surface"])
-        body.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        return card, body
-
-    def _build_header(self, parent: tk.Widget) -> None:
-        header = tk.Frame(parent, bg=COLORS["navy"], padx=20, pady=16)
-        header.pack(fill="x")
-        brand = tk.Frame(header, bg=COLORS["navy"])
-        brand.pack(side="left")
-        tk.Label(
-            brand,
-            text="CS",
-            bg=COLORS["teal"],
-            fg=COLORS["surface"],
-            width=3,
-            height=2,
-            font=("Segoe UI", 13, "bold"),
-        ).pack(side="left", padx=(0, 13))
-        title_block = tk.Frame(brand, bg=COLORS["navy"])
-        title_block.pack(side="left")
-        tk.Label(
-            title_block,
-            text="CYBER SENTINELS",
-            bg=COLORS["navy"],
-            fg=COLORS["surface"],
-            font=("Segoe UI", 17, "bold"),
-        ).pack(anchor="w")
-        tk.Label(
-            title_block,
-            text="DEFENSIVE OPERATIONS  /  LOCAL SOC",
-            bg=COLORS["navy"],
-            fg="#bdcbd9",
-            font=("Segoe UI", 9),
-        ).pack(anchor="w", pady=(3, 0))
-
-        controls = tk.Frame(header, bg=COLORS["navy"])
-        controls.pack(side="right")
-        self.model_status_var = tk.StringVar(value="QWEN3 · CHECKING")
-        self.model_status_label = tk.Label(
-            controls,
-            textvariable=self.model_status_var,
-            bg=COLORS["navy_light"],
-            fg="#dce8f2",
-            padx=12,
-            pady=8,
-            font=("Segoe UI", 9, "bold"),
-        )
-        self.model_status_label.pack(side="left", padx=(0, 12))
-        self.refresh_button = tk.Button(
-            controls,
-            text="Refresh",
-            command=self.refresh,
-            bg=COLORS["surface"],
-            fg=COLORS["navy"],
-            activebackground="#e7eef5",
-            activeforeground=COLORS["navy"],
-            relief="flat",
-            padx=17,
-            pady=9,
-            font=("Segoe UI", 10, "bold"),
-            cursor="hand2",
-        )
-        self.refresh_button.pack(side="left")
-
-    def _build_metrics(self, parent: tk.Widget) -> None:
-        row = tk.Frame(parent, bg=COLORS["background"])
-        row.pack(fill="x", pady=(14, 0))
-        self.metric_values: dict[str, tk.StringVar] = {}
-        metrics = (
-            ("OPEN INCIDENTS", "incidents", COLORS["blue"]),
-            ("PRIORITY 1", "p1", COLORS["red"]),
-            ("DETECTION ALERTS", "alerts", COLORS["amber"]),
-            ("HEALTHY SOURCES", "sources", COLORS["teal"]),
-        )
-        for index, (label, key, accent) in enumerate(metrics):
-            row.columnconfigure(index, weight=1, uniform="metric")
-            card = tk.Frame(
-                row,
-                bg=COLORS["surface"],
-                highlightbackground=COLORS["border"],
-                highlightthickness=1,
+        with ui.column().classes("soc-shell w-full p-4 gap-3"):
+            self._build_header()
+            self._build_qwen_config()
+            self.status_line = ui.label("Loading SOC data…").classes("text-sm").style(
+                f"color:{COLORS['muted']}"
             )
-            card.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 9, 0))
-            tk.Frame(card, bg=accent, height=3).pack(fill="x")
-            content = tk.Frame(card, bg=COLORS["surface"], padx=15, pady=9)
-            content.pack(fill="both", expand=True)
-            tk.Label(
-                content,
-                text=label,
-                bg=COLORS["surface"],
-                fg=COLORS["muted"],
-                font=("Segoe UI", 8, "bold"),
-            ).pack(anchor="w")
-            value = tk.StringVar(value="—")
-            self.metric_values[key] = value
-            tk.Label(
-                content,
-                textvariable=value,
-                bg=COLORS["surface"],
-                fg=COLORS["ink"],
-                font=("Segoe UI", 21, "bold"),
-            ).pack(anchor="w", pady=(2, 0))
+            self._build_metrics()
+            with ui.element("div").classes("soc-workspace w-full"):
+                with ui.column().classes("w-full gap-4"):
+                    self._build_priority_queue()
+                    self._build_sources()
+                    self._build_member_one()
+                with ui.column().classes("w-full gap-4"):
+                    self._build_selected_incident()
+                    self._build_explanation()
+                    self._build_timeline()
+            ui.label(
+                "Detection and correlation remain deterministic; Member 1 intelligence is context, "
+                "and no response action is automatic."
+            ).classes("text-xs").style(f"color:{COLORS['muted']}")
+        self._build_dialogs()
 
-    def _build_incident_queue(self, parent: tk.Widget) -> None:
-        card, body = self._card(parent, "PRIORITY QUEUE")
-        card.grid(row=0, column=0, sticky="nsew", pady=(0, 9))
-        body.rowconfigure(1, weight=1)
-        body.columnconfigure(0, weight=1)
-        tk.Label(
-            body,
-            text="Select an incident for its summary and evidence chain.",
-            bg=COLORS["surface"],
-            fg=COLORS["muted"],
-            anchor="w",
-            font=("Segoe UI", 9),
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 7))
-        self.incident_tree = ttk.Treeview(
-            body,
-            columns=("priority", "score", "incident"),
-            show="headings",
-            selectmode="browse",
-        )
-        for key, label, width, stretch in (
-            ("priority", "LEVEL", 66, False),
-            ("score", "SCORE", 60, False),
-            ("incident", "INCIDENT", 210, True),
+    def _build_header(self) -> None:
+        with ui.row().classes("w-full items-center justify-between gap-4 flex-wrap p-4").style(
+            f"background:{COLORS['navy']};border-radius:18px"
         ):
-            self.incident_tree.heading(key, text=label)
-            self.incident_tree.column(key, width=width, stretch=stretch)
-        self.incident_tree.grid(row=1, column=0, sticky="nsew")
-        self.incident_tree.bind("<<TreeviewSelect>>", self._on_incident_select)
-        self.incident_tree.tag_configure("P1", foreground=COLORS["red"])
-        self.incident_tree.tag_configure("P2", foreground=COLORS["amber"])
-        self.incident_tree.tag_configure("P3", foreground=COLORS["blue"])
+            with ui.row().classes("items-center gap-3"):
+                ui.icon("shield").classes("text-3xl").style(f"color:{COLORS['teal']}")
+                with ui.column().classes("gap-0"):
+                    ui.label("CYBER SENTINELS").classes("text-xl font-bold text-white")
+                    ui.label("DEFENSIVE OPERATIONS  /  LOCAL SOC").classes(
+                        "text-xs"
+                    ).style("color:#bdcbd9")
+            with ui.row().classes("items-center gap-2 flex-wrap"):
+                self.data_badge = ui.badge("MONITORING · STARTING").style(
+                    "background:#203f5b;color:#dce8f2"
+                )
+                self.model_badge = ui.badge("QWEN3 · CHECKING").style(
+                    "background:#203f5b;color:#dce8f2"
+                )
+                self.refresh_button = ui.button(
+                    "Refresh", icon="refresh", on_click=self.refresh
+                ).props(
+                    "unelevated"
+                ).style("background:#3473d1;color:white")
+                self.alerts_button = ui.button(
+                    "Alerts 0", icon="notifications", on_click=self.open_alert_history
+                ).props("outline").style("color:white")
 
-    def _build_sources(self, parent: tk.Widget) -> None:
-        card, body = self._card(parent, "LOG SOURCE HEALTH")
-        card.grid(row=1, column=0, sticky="nsew", pady=(9, 0))
-        body.columnconfigure(0, weight=1)
-        self.source_tree = ttk.Treeview(
-            body,
-            columns=("source", "host", "status"),
-            show="headings",
-            height=4,
-        )
-        for key, label, width in (
-            ("source", "SOURCE", 155),
-            ("host", "HOST", 100),
-            ("status", "HEALTH", 100),
-        ):
-            self.source_tree.heading(key, text=label)
-            self.source_tree.column(key, width=width, stretch=(key == "source"))
-        self.source_tree.grid(row=0, column=0, sticky="nsew")
-        self.source_tree.tag_configure("healthy", foreground=COLORS["green"])
-        self.source_tree.tag_configure("warning", foreground=COLORS["amber"])
+    def _build_qwen_config(self) -> None:
+        with ui.card().classes("soc-card w-full"):
+            with ui.row().classes("w-full items-end gap-3 flex-wrap"):
+                self.url_input = ui.input(
+                    "Ollama URL", value=self.ollama_url
+                ).props("outlined dense").classes("grow min-w-[260px]")
+                self.model_input = ui.input(
+                    "Model", value=self.ollama_model
+                ).props("outlined dense").classes("w-56")
+                self.test_qwen_button = ui.button(
+                    "Test Qwen", icon="wifi_tethering", on_click=self.test_qwen
+                ).props("unelevated").style(f"background:{COLORS['blue']};color:white")
+            self.url_input.on_value_change(self._on_qwen_config_change)
+            self.model_input.on_value_change(self._on_qwen_config_change)
+            self.qwen_status = ui.label(self.qwen_message).classes("text-sm").style(
+                f"color:{COLORS['muted']}"
+            )
 
-    def _build_incident_overview(self, parent: tk.Widget) -> None:
-        card, body = self._card(parent, "SELECTED INCIDENT")
-        card.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        body.columnconfigure(0, weight=1)
-        header = tk.Frame(body, bg=COLORS["surface"])
-        header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(0, weight=1)
-        self.incident_title = tk.Label(
-            header,
-            text="Select an incident",
-            bg=COLORS["surface"],
-            fg=COLORS["ink"],
-            anchor="w",
-            justify="left",
-            wraplength=800,
-            font=("Segoe UI", 16, "bold"),
-        )
-        self.incident_title.grid(row=0, column=0, sticky="ew")
-        self.priority_badge = tk.Label(
-            header,
-            text="—",
-            bg=COLORS["blue_pale"],
-            fg=COLORS["blue"],
-            padx=11,
-            pady=6,
-            font=("Segoe UI", 9, "bold"),
-        )
-        self.priority_badge.grid(row=0, column=1, sticky="e", padx=(12, 0))
-        self.incident_meta_var = tk.StringVar(value="Waiting for SOC results")
-        tk.Label(
-            body,
-            textvariable=self.incident_meta_var,
-            bg=COLORS["surface"],
-            fg=COLORS["muted"],
-            anchor="w",
-            font=("Segoe UI", 9),
-        ).grid(row=1, column=0, sticky="ew", pady=(7, 0))
-        self.instant_overview_var = tk.StringVar(value="The dashboard is loading local incident data.")
-        tk.Label(
-            body,
-            textvariable=self.instant_overview_var,
-            bg=COLORS["surface"],
-            fg=COLORS["ink"],
-            anchor="w",
-            justify="left",
-            wraplength=980,
-            font=("Segoe UI", 10),
-        ).grid(row=2, column=0, sticky="ew", pady=(9, 0))
+    def _build_metrics(self) -> None:
+        self.metric_values: dict[str, Any] = {}
+        with ui.row().classes("w-full gap-3 flex-wrap"):
+            for title, key, color in (
+                ("OPEN INCIDENTS", "incidents", COLORS["blue"]),
+                ("PRIORITY 1", "p1", COLORS["red"]),
+                ("DETECTION ALERTS", "alerts", COLORS["amber"]),
+                ("HEALTHY SOURCES", "sources", COLORS["green"]),
+            ):
+                with ui.card().classes("soc-card soc-metric p-4"):
+                    ui.label(title).classes("text-xs font-bold").style(
+                        f"color:{COLORS['muted']}"
+                    )
+                    self.metric_values[key] = ui.label("0").classes(
+                        "text-3xl font-bold"
+                    ).style(f"color:{color}")
 
-    def _build_attack_path(self, parent: tk.Widget) -> None:
-        card, body = self._card(parent, "CORRELATED ATTACK PATH")
-        card.grid(row=1, column=0, sticky="ew", pady=8)
-        self.attack_path = tk.Frame(body, bg=COLORS["surface"])
-        self.attack_path.pack(fill="x")
+    def _build_priority_queue(self) -> None:
+        with ui.card().classes("soc-card w-full"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("PRIORITY QUEUE").classes("text-sm font-bold")
+                ui.label("Select an incident").classes("text-xs").style(
+                    f"color:{COLORS['muted']}"
+                )
+            self.incident_queue = ui.column().classes("w-full gap-2 mt-3")
 
-    def _build_ai_summary(self, parent: tk.Widget) -> None:
-        card, body = self._card(parent, "QWEN3 AI SUMMARY · ADVISORY ONLY")
-        card.grid(row=2, column=0, sticky="ew", pady=8)
-        body.columnconfigure(0, weight=1)
-        body.rowconfigure(1, weight=1)
-        bar = tk.Frame(body, bg=COLORS["surface"])
-        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        bar.columnconfigure(0, weight=1)
-        self.ai_assessment_label = tk.Label(
-            bar,
-            text="WAITING",
-            bg=COLORS["blue_pale"],
-            fg=COLORS["blue"],
-            padx=10,
-            pady=5,
-            font=("Segoe UI", 8, "bold"),
-        )
-        self.ai_assessment_label.grid(row=0, column=0, sticky="w")
-        self.ai_status_var = tk.StringVar(value="Qwen3 will summarize the selected incident automatically.")
-        tk.Label(
-            bar,
-            textvariable=self.ai_status_var,
-            bg=COLORS["surface"],
-            fg=COLORS["muted"],
-            anchor="e",
-            font=("Segoe UI", 9),
-        ).grid(row=0, column=1, sticky="e", padx=(8, 10))
-        self.regenerate_button = tk.Button(
-            bar,
-            text="Regenerate",
-            command=self._regenerate_summary,
-            bg="#f1f5f9",
-            fg=COLORS["ink"],
-            activebackground="#e2e8f0",
-            activeforeground=COLORS["ink"],
-            relief="flat",
-            padx=10,
-            pady=5,
-            font=("Segoe UI", 8, "bold"),
-            cursor="hand2",
-        )
-        self.regenerate_button.grid(row=0, column=2, sticky="e")
-        self.ai_summary_text = tk.Text(
-            body,
-            height=7,
-            bg=COLORS["surface"],
-            fg=COLORS["ink"],
-            relief="flat",
-            wrap="word",
-            padx=0,
-            pady=0,
-            font=("Segoe UI", 10),
-            state="disabled",
-            spacing1=2,
-            spacing3=3,
-        )
-        self.ai_summary_text.grid(row=1, column=0, sticky="nsew")
-        summary_scrollbar = ttk.Scrollbar(body, orient="vertical", command=self.ai_summary_text.yview)
-        summary_scrollbar.grid(row=1, column=1, sticky="ns")
-        self.ai_summary_text.configure(yscrollcommand=summary_scrollbar.set)
-        self.ai_summary_text.tag_configure("section", foreground=COLORS["navy"], font=("Segoe UI", 9, "bold"))
-        self.ai_summary_text.tag_configure("muted", foreground=COLORS["muted"])
-        self.ai_summary_text.tag_configure("assessment", foreground=COLORS["teal"], font=("Segoe UI", 10, "bold"))
-        self.ai_summary_text.tag_configure("warning", foreground=COLORS["amber"], font=("Segoe UI", 10, "bold"))
+    def _build_sources(self) -> None:
+        with ui.card().classes("soc-card w-full"):
+            ui.label("LOG SOURCE HEALTH").classes("text-sm font-bold")
+            self.source_table = ui.table(
+                columns=[
+                    {"name": "source", "label": "SOURCE", "field": "source", "align": "left"},
+                    {"name": "host", "label": "HOST", "field": "host", "align": "left"},
+                    {"name": "health", "label": "HEALTH", "field": "health", "align": "left"},
+                ],
+                rows=[],
+                row_key="source",
+            ).classes("soc-source-table w-full mt-2").props("flat bordered dense virtual-scroll")
+            self.source_table.add_slot(
+                "body-cell-health",
+                """
+                <q-td :props="props">
+                  <q-badge
+                    :style="props.value === 'HEALTHY'
+                      ? 'background:#e8f5ed;color:#23774d'
+                      : props.value.startsWith('SILENT')
+                        ? 'background:#fdecef;color:#b9364d'
+                        : 'background:#fff3df;color:#a85d00'"
+                    style="border-radius:9999px;font-weight:600;padding:4px 8px"
+                  >{{ props.value }}</q-badge>
+                </q-td>
+                """,
+            )
 
-    def _build_timeline(self, parent: tk.Widget) -> None:
-        card, body = self._card(parent, "INCIDENT TIMELINE")
-        card.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
-        body.rowconfigure(1, weight=1)
-        body.columnconfigure(0, weight=1)
-        header = tk.Frame(body, bg=COLORS["surface"])
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        header.columnconfigure(0, weight=1)
-        tk.Label(
-            header,
-            text="Concise alert summaries; original log lines are hidden.",
-            bg=COLORS["surface"],
-            fg=COLORS["muted"],
-            anchor="w",
-            font=("Segoe UI", 9),
-        ).grid(row=0, column=0, sticky="ew")
-        self.raw_evidence_button = tk.Button(
-            header,
-            text="View source logs",
-            command=self._show_source_logs,
-            bg="#f1f5f9",
-            fg=COLORS["ink"],
-            activebackground="#e2e8f0",
-            activeforeground=COLORS["ink"],
-            relief="flat",
-            padx=10,
-            pady=5,
-            font=("Segoe UI", 8, "bold"),
-            cursor="hand2",
-            state="disabled",
-        )
-        self.raw_evidence_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
-        self.timeline_tree = ttk.Treeview(
-            body,
-            columns=("time", "stage", "rule", "summary"),
-            show="headings",
-            height=5,
-        )
-        for key, label, width, stretch in (
-            ("time", "TIME (UTC)", 100, False),
-            ("stage", "STAGE", 120, False),
-            ("rule", "RULE", 86, False),
-            ("summary", "DETECTION SUMMARY", 360, True),
-        ):
-            self.timeline_tree.heading(key, text=label)
-            self.timeline_tree.column(key, width=width, stretch=stretch)
-        self.timeline_tree.grid(row=1, column=0, sticky="nsew")
-        self.timeline_tree.tag_configure("odd", background="#f8fafc")
+    def _build_member_one(self) -> None:
+        with ui.card().classes("soc-card w-full"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("MEMBER 1 · THREAT INTELLIGENCE").classes("text-sm font-bold")
+                self.intel_count = ui.badge("0 findings").style(
+                    f"background:#e6f5f0;color:{COLORS['teal']}"
+                )
+            ui.label(
+                "External vulnerability and credential exposure context; not a confirmed incident."
+            ).classes("text-xs mt-1").style(f"color:{COLORS['muted']}")
+            self.intel_container = ui.column().classes("w-full gap-2 mt-3")
 
-    def refresh(self) -> None:
-        self.refresh_button.configure(state="disabled")
-        self.status_var.set("Loading deterministic SOC results…")
-        threading.Thread(target=self._load_in_background, daemon=True).start()
+    def _build_selected_incident(self) -> None:
+        with ui.card().classes("soc-card w-full"):
+            with ui.row().classes("w-full items-start justify-between gap-3"):
+                with ui.column().classes("grow gap-1"):
+                    ui.label("SELECTED INCIDENT").classes("text-xs font-bold").style(
+                        f"color:{COLORS['muted']}"
+                    )
+                    self.incident_title = ui.label("Select an incident").classes(
+                        "text-xl font-bold"
+                    )
+                    self.incident_meta = ui.label("Waiting for SOC results").classes(
+                        "text-xs"
+                    ).style(f"color:{COLORS['muted']}")
+                self.priority_badge = ui.badge("—").style(
+                    f"background:#eaf1fc;color:{COLORS['blue']}"
+                )
+            ui.separator().classes("my-3")
+            ui.label("CORRELATED ATTACK PATH").classes("text-xs font-bold").style(
+                f"color:{COLORS['muted']}"
+            )
+            self.attack_path = ui.row().classes("w-full items-center flex-wrap gap-2 mt-2")
 
-    def _load_in_background(self) -> None:
-        try:
-            snapshot = self.provider.load()
-        except (OSError, ValueError, RuntimeError) as exc:
-            self.root.after(0, self._show_load_error, str(exc))
+    def _build_explanation(self) -> None:
+        with ui.card().classes("soc-card w-full"):
+            with ui.row().classes("w-full items-center justify-between gap-2 flex-wrap"):
+                ui.label("INCIDENT EXPLANATION").classes("text-sm font-bold")
+                self.ai_assessment = ui.badge("ADVISORY").style(
+                    f"background:#eaf1fc;color:{COLORS['blue']}"
+                )
+            with ui.row().classes("w-full items-center justify-between gap-2 mt-2"):
+                self.ai_status = ui.label(
+                    "Qwen3 explains evidence; deterministic rules decide detection."
+                ).classes("text-xs").style(f"color:{COLORS['muted']}")
+                self.regenerate_button = ui.button(
+                    "Regenerate explanation",
+                    icon="auto_awesome",
+                    on_click=self.regenerate_explanation,
+                ).props("flat dense")
+            self.explanation_container = ui.column().classes("w-full gap-2 mt-3")
+
+    def _build_timeline(self) -> None:
+        with ui.card().classes("soc-card w-full"):
+            with ui.row().classes("w-full items-center justify-between gap-3 flex-wrap"):
+                ui.label("INCIDENT TIMELINE").classes("text-sm font-bold")
+                self.source_logs_button = ui.button(
+                    "View source logs", icon="article", on_click=self.open_source_logs
+                ).props("flat dense")
+            self.timeline_table = ui.table(
+                columns=[
+                    {"name": "time", "label": "TIME (UTC)", "field": "time", "align": "left"},
+                    {"name": "stage", "label": "STAGE", "field": "stage", "align": "left"},
+                    {"name": "rule", "label": "RULE", "field": "rule", "align": "left"},
+                    {
+                        "name": "summary",
+                        "label": "DETECTION SUMMARY",
+                        "field": "summary",
+                        "align": "left",
+                    },
+                ],
+                rows=[],
+                row_key="rule",
+                pagination={"rowsPerPage": 8},
+            ).classes("w-full mt-2").props("flat bordered dense wrap-cells")
+
+    def _build_dialogs(self) -> None:
+        with ui.dialog() as self.alert_dialog:
+            with ui.card().classes("w-full").style("width:min(1100px,95vw);max-width:95vw"):
+                with ui.row().classes("w-full items-center justify-between"):
+                    ui.label("DETECTION ALERT HISTORY").classes("text-lg font-bold")
+                    ui.button(icon="close", on_click=self.alert_dialog.close).props("flat round")
+                ui.label(
+                    "Deterministic detections from the current monitoring session."
+                ).classes("text-sm").style(f"color:{COLORS['muted']}")
+                self.alert_table = ui.table(
+                    columns=[
+                        {"name": "time", "label": "TIME (UTC)", "field": "time", "align": "left"},
+                        {"name": "priority", "label": "LEVEL", "field": "priority", "align": "left"},
+                        {"name": "rule", "label": "DETECTION", "field": "rule", "align": "left"},
+                        {"name": "incident", "label": "INCIDENT", "field": "incident", "align": "left"},
+                        {"name": "details", "label": "SUMMARY", "field": "details", "align": "left"},
+                    ],
+                    rows=[],
+                    row_key="id",
+                    pagination={"rowsPerPage": 12},
+                ).classes("w-full mt-3").props("flat bordered dense wrap-cells")
+        with ui.dialog() as self.source_dialog:
+            with ui.card().classes("w-full").style("width:min(1000px,95vw);max-width:95vw"):
+                with ui.row().classes("w-full items-center justify-between"):
+                    ui.label("RAW SOURCE EVIDENCE").classes("text-lg font-bold")
+                    ui.button(icon="close", on_click=self.source_dialog.close).props("flat round")
+                self.source_log_container = ui.column().classes("w-full max-h-[70vh] overflow-auto")
+
+    async def refresh(self) -> None:
+        if self.loading:
             return
-        self.root.after(0, self._render, snapshot)
-
-    def _show_load_error(self, error: str) -> None:
-        self.refresh_button.configure(state="normal")
-        self.status_var.set(f"SOC refresh failed: {error}")
-
-    def _render(self, snapshot: DashboardSnapshot) -> None:
-        self._snapshot_generation += 1
-        self.snapshot = snapshot
-        self.ai_explanations.clear()
-        self.ai_errors.clear()
-        self.incidents = sorted(
-            snapshot.incidents,
-            key=lambda item: (-int(item.get("score", 0)), str(item.get("id", ""))),
-        )
-        p1_count = sum(1 for incident in self.incidents if incident.get("priority") == "P1")
-        healthy = sum(1 for source in snapshot.sources if source.get("ok"))
-        self.metric_values["incidents"].set(str(len(self.incidents)))
-        self.metric_values["p1"].set(str(p1_count))
-        self.metric_values["alerts"].set(str(len(snapshot.alerts)))
-        self.metric_values["sources"].set(f"{healthy}/{len(snapshot.sources)}")
-
-        self.incident_tree.delete(*self.incident_tree.get_children())
-        for index, incident in enumerate(self.incidents):
-            priority = str(incident.get("priority", "—"))
-            self.incident_tree.insert(
-                "",
-                "end",
-                iid=str(index),
-                values=(
-                    priority,
-                    _text(incident.get("score")),
-                    _text(incident.get("title"), str(incident.get("id", "Incident"))),
-                ),
-                tags=(priority, "odd" if index % 2 else "even"),
-            )
-
-        self.source_tree.delete(*self.source_tree.get_children())
-        for source in snapshot.sources:
-            ok = bool(source.get("ok"))
-            self.source_tree.insert(
-                "",
-                "end",
-                values=(
-                    _text(source.get("source")),
-                    _text(source.get("host")),
-                    "HEALTHY" if ok else self._source_warning(source),
-                ),
-                tags=("healthy" if ok else "warning",),
-            )
-        self._render_agent_status(snapshot)
-
-        if self.incidents:
-            self.incident_tree.selection_set("0")
-            self.incident_tree.focus("0")
-            self._show_incident(0)
+        self.loading = True
+        self.refresh_button.disable()
+        self.data_badge.set_text("MONITORING · LOADING")
+        try:
+            snapshot = await asyncio.to_thread(self.provider.load)
+        except Exception as exc:
+            log.exception("Dashboard data refresh failed")
+            self.data_badge.set_text("DATA · ERROR")
+            self.status_line.set_text(f"Unable to load SOC data: {exc}")
+            self.status_line.style(f"color:{COLORS['red']}")
         else:
-            self._selected_index = None
-            self.incident_title.configure(text="No correlated incidents")
-            self.priority_badge.configure(text="CLEAR", bg=COLORS["green_pale"], fg=COLORS["green"])
-            self.incident_meta_var.set("No incident met the deterministic correlation criteria.")
-            self.instant_overview_var.set("No correlated incidents were returned. Detection and maintenance results remain available.")
-            for child in self.attack_path.winfo_children():
-                child.destroy()
-            self.ai_assessment_label.configure(text="NO INCIDENT", bg=COLORS["blue_pale"], fg=COLORS["blue"])
-            self.ai_status_var.set("The AI does not classify an empty incident list.")
-            self._write_ai_text("No incident selected. Qwen3 will not invent an incident or classify single alerts.")
-            self.timeline_tree.delete(*self.timeline_tree.get_children())
-            self.raw_evidence_button.configure(state="disabled")
+            first_snapshot = self.snapshot is None
+            self.snapshot = snapshot
+            self.incidents = sorted(
+                snapshot.incidents,
+                key=lambda item: (-int(item.get("score", 0)), str(item.get("id", ""))),
+            )
+            new_alerts = self._record_new_alerts(snapshot)
+            self._render_snapshot(snapshot)
+            if new_alerts and not first_snapshot:
+                ui.notify(
+                    f"{len(new_alerts)} new detection alert(s)",
+                    type="warning",
+                    position="top",
+                )
+        finally:
+            self.loading = False
+            self.refresh_button.enable()
 
-        self.refresh_button.configure(state="normal")
-        self.status_var.set(
-            f"Updated {_when(snapshot.generated_at)} · {len(snapshot.singles)} single alert(s) · "
-            f"{len(snapshot.maintenance)} approved maintenance record(s) · rules decide detection"
+    def _record_new_alerts(self, snapshot: DashboardSnapshot) -> list[Record]:
+        alert_incidents = {
+            str(alert.get("id", "")): str(incident.get("title", incident.get("id", "")))
+            for incident in snapshot.incidents
+            for alert in incident.get("alerts", [])
+        }
+        cycle = int(snapshot.evaluation.get("cycle", 0))
+        created: list[Record] = []
+        for alert in snapshot.alerts:
+            evidence = alert.get("evidence") or []
+            markers = tuple(sorted({
+                marker
+                for item in evidence
+                for marker in re.findall(r"CSV-ROW-\d+", str(item.get("raw", "")))
+            }))
+            if not markers:
+                markers = tuple(sorted(str(item.get("id", "")) for item in evidence))
+            fingerprint = (
+                cycle,
+                str(alert.get("rule", "")),
+                markers,
+                str(alert.get("text", "")),
+            )
+            if fingerprint in self.alert_fingerprints:
+                continue
+            self.alert_fingerprints.add(fingerprint)
+            record = {
+                "id": f"alert-{len(self.alert_history)}",
+                "time": _when(alert.get("time")),
+                "priority": _priority(alert.get("severity", 0)),
+                "rule": _text(alert.get("rule")),
+                "incident": alert_incidents.get(str(alert.get("id", "")), "Individual alert"),
+                "details": plain_alert_explanation(alert),
+            }
+            self.alert_history.append(record)
+            created.append(record)
+        self.alerts_button.set_text(f"Alerts {len(self.alert_history)}")
+        self.alert_table.rows = list(reversed(self.alert_history))
+        self.alert_table.update()
+        return created
+
+    def _render_snapshot(self, snapshot: DashboardSnapshot) -> None:
+        evaluation = snapshot.evaluation
+        if evaluation:
+            self.data_badge.set_text(
+                f"SIMULATION · {evaluation.get('rows_seen', 0)} events · cycle {evaluation.get('cycle', 1)}"
+            )
+        else:
+            self.data_badge.set_text(f"MONITORING · {_when(snapshot.generated_at, '%H:%M:%S UTC')}")
+        self.status_line.set_text(
+            f"Updated {_when(snapshot.generated_at)} · {len(snapshot.singles)} single alerts · "
+            f"{len(snapshot.maintenance)} approved maintenance records"
         )
+        self.status_line.style(f"color:{COLORS['muted']}")
+        p1_count = sum(incident.get("priority") == "P1" for incident in self.incidents)
+        healthy = sum(bool(source.get("ok")) for source in snapshot.sources)
+        self.metric_values["incidents"].set_text(str(len(self.incidents)))
+        self.metric_values["p1"].set_text(str(p1_count))
+        self.metric_values["alerts"].set_text(str(len(snapshot.alerts)))
+        self.metric_values["sources"].set_text(f"{healthy}/{len(snapshot.sources)}")
+        self.source_table.rows = [
+            {
+                "source": _text(source.get("source")),
+                "host": _text(source.get("host")),
+                "health": "HEALTHY" if source.get("ok") else self._source_warning(source),
+            }
+            for source in snapshot.sources
+        ]
+        self.source_table.update()
+        self._render_priority_queue()
+        self._render_member_one(snapshot)
+        if self.incidents:
+            if self.selected_incident_id not in {str(item.get("id", "")) for item in self.incidents}:
+                self.selected_incident_id = str(self.incidents[0].get("id", ""))
+                self._render_priority_queue()
+            self._render_selected_incident()
+        else:
+            self.selected_incident_id = None
+            self.incident_title.set_text("No correlated incidents")
+            self.incident_meta.set_text("No incident met the deterministic correlation criteria.")
+            self.priority_badge.set_text("CLEAR")
+            self.priority_badge.style(
+                f"background-color:#e8f5ed !important;color:{COLORS['green']} !important"
+            )
+            self.attack_path.clear()
+            self.explanation_container.clear()
+            with self.explanation_container:
+                ui.label("There is no incident for Qwen3 to explain.").classes("text-sm")
+            self.ai_assessment.set_text("NO INCIDENT")
+            self.ai_status.set_text("The AI does not classify an empty incident list.")
+            self.timeline_table.rows = []
+            self.timeline_table.update()
+            self.source_logs_button.disable()
+
+    def _render_priority_queue(self) -> None:
+        self.incident_queue.clear()
+        with self.incident_queue:
+            if not self.incidents:
+                ui.label("No correlated incidents. The deterministic SOC rules found nothing to escalate.").classes(
+                    "text-sm"
+                ).style(f"color:{COLORS['muted']}")
+                return
+            for incident in self.incidents:
+                priority = str(incident.get("priority", "P3"))
+                _, foreground = _priority_colors(priority)
+                incident_id = str(incident.get("id", "incident"))
+                selected = incident_id == self.selected_incident_id
+                title = _text(incident.get("title"), incident_id)
+                button = ui.button(
+                    f"{priority}  ·  {title}",
+                    on_click=lambda event, key=incident_id: (
+                        self.select_incident(key) if event.sender else None
+                    ),
+                ).props("flat").classes("w-full justify-start")
+                button.style(
+                    f"background-color:{'#eef3fa' if selected else '#ffffff'} !important;"
+                    f"color:{foreground} !important;border-left:4px solid {foreground};"
+                    "white-space:normal;text-align:left"
+                )
+
+    def _render_member_one(self, snapshot: DashboardSnapshot) -> None:
+        findings = snapshot.threat_findings
+        hunts = snapshot.hunt_requests
+        self.intel_count.set_text(f"{len(findings)} findings · {len(hunts)} hunts")
+        self.intel_container.clear()
+        with self.intel_container:
+            if not findings:
+                ui.label("No cached threat-intelligence matches for the current asset inventory.").classes(
+                    "text-sm"
+                ).style(f"color:{COLORS['muted']}")
+            for finding in findings[:8]:
+                kind = str(finding.get("type", "threat finding"))
+                is_vulnerability = kind == "vulnerability_exposure"
+                title = (
+                    str(finding.get("cve", "Vulnerability exposure"))
+                    if is_vulnerability
+                    else f"Credential exposure · {_text(finding.get('account'), 'account unknown')}"
+                )
+                with ui.card().classes("w-full p-3").style(
+                    "border:1px solid #e6ebf1;border-radius:12px;box-shadow:none"
+                ):
+                    with ui.row().classes("w-full items-center justify-between gap-2"):
+                        ui.label(title).classes("font-bold text-sm")
+                        if is_vulnerability and finding.get("cisa_kev"):
+                            ui.badge("CISA KEV").style(
+                                f"background-color:#fdecef !important;color:{COLORS['red']} !important"
+                            )
+                        elif not is_vulnerability:
+                            ui.badge(
+                                f"Confidence {_number(finding.get('confidence')):.0%}"
+                            ).style(
+                                f"background-color:#eaf1fc !important;color:{COLORS['blue']} !important"
+                            )
+                    ui.label(_text(finding.get("summary"))).classes("text-sm")
+                    metadata = [
+                        "Assets: " + ", ".join(str(item) for item in finding.get("affected_assets", [])),
+                    ]
+                    if is_vulnerability:
+                        metadata.append(f"EPSS {_number(finding.get('epss_score')):.2f}")
+                        if finding.get("osint_corroboration"):
+                            metadata.append(
+                                "OSINT corroboration: "
+                                + ", ".join(str(item) for item in finding["osint_corroboration"])
+                            )
+                    elif finding.get("source"):
+                        metadata.append(f"Source: {finding['source']}")
+                    ui.label(" · ".join(metadata)).classes("text-xs").style(
+                        f"color:{COLORS['muted']}"
+                    )
+            if len(findings) > 8:
+                ui.label(f"{len(findings) - 8} more findings are available in the agent output.").classes(
+                    "text-xs"
+                ).style(f"color:{COLORS['muted']}")
+            with ui.expansion(f"Targeted hunts for Member 2 ({len(hunts)})").classes("w-full"):
+                if hunts:
+                    for hunt in hunts[:12]:
+                        ui.label(
+                            f"{_text(hunt.get('hunt_id'))} · "
+                            f"{', '.join(str(item) for item in hunt.get('target_assets', []))}"
+                        ).classes("text-sm font-bold")
+                        ui.label(_text(hunt.get("hunt_query"))).classes("text-sm")
+                else:
+                    ui.label("No targeted hunts were generated.").classes("text-sm")
+
+    def _render_selected_incident(self) -> None:
+        incident = next(
+            (
+                item for item in self.incidents
+                if str(item.get("id", "")) == self.selected_incident_id
+            ),
+            None,
+        )
+        if incident is None:
+            return
+        incident_id = str(incident.get("id", "incident"))
+        priority = str(incident.get("priority", "P3"))
+        title = _text(incident.get("title"), incident_id)
+        self.incident_title.set_text(title)
+        confidence = incident.get("confidence")
+        confidence_text = f"{confidence:.0%}" if isinstance(confidence, (int, float)) else _text(confidence)
+        self.incident_meta.set_text(
+            f"{incident_id} · {_when(incident.get('start'))} – "
+            f"{_when(incident.get('end'), '%H:%M UTC')} · "
+            f"{len(incident.get('alerts', []))} correlated alerts · confidence {confidence_text}"
+        )
+        background, foreground = _priority_colors(priority)
+        self.priority_badge.set_text(f"{priority} · SCORE {incident.get('score', '—')}")
+        self.priority_badge.style(
+            f"background-color:{background} !important;color:{foreground} !important"
+        )
+        self.attack_path.clear()
+        with self.attack_path:
+            stages = incident.get("stages", [])
+            for index, stage in enumerate(stages):
+                ui.badge(str(stage).upper()).style(
+                    f"background-color:#eaf1fc !important;color:{COLORS['blue']} !important"
+                )
+                if index < len(stages) - 1:
+                    ui.icon("chevron_right").style(f"color:{COLORS['muted']}")
+            techniques = incident.get("attack", [])
+            if techniques:
+                technique_text = " · ".join(
+                    str(item.get("id", "")) for item in techniques[:6]
+                )
+                ui.label(f"ATT&CK  {technique_text}").classes("text-xs").style(
+                    f"color:{COLORS['muted']}"
+                )
+        rows = []
+        for alert in sorted(
+            incident.get("alerts", []),
+            key=lambda item: str(item.get("time", "")),
+        ):
+            summary = _text(alert.get("text"), _text(alert.get("rule")))
+            if len(summary) > 180:
+                summary = summary[:177] + "..."
+            rows.append(
+                {
+                    "time": _when(alert.get("time"), "%H:%M:%S"),
+                    "stage": _text(alert.get("stage"), "alert"),
+                    "rule": _text(alert.get("rule")),
+                    "summary": f"{summary} · {len(alert.get('evidence') or [])} evidence line(s)",
+                }
+            )
+        self.timeline_table.rows = rows
+        self.timeline_table.update()
+        self.source_logs_button.enable()
+        self._render_explanation(incident)
+
+    def _render_explanation(self, incident: Record) -> None:
+        incident_id = str(incident.get("id", "incident"))
+        self.explanation_container.clear()
+        result_refs = self.qwen_results.get(incident_id)
+        error = self.qwen_errors.get(incident_id)
+        if result_refs:
+            result, evidence_refs = result_refs
+            assessment = str(result.get("triage_assessment", "inconclusive"))
+            labels = {
+                "likely_suspicious": ("LIKELY SUSPICIOUS · ADVISORY", "#fdecef", COLORS["red"]),
+                "possibly_authorized_or_benign": ("POSSIBLY BENIGN · ADVISORY", "#fff3df", COLORS["amber"]),
+                "inconclusive": ("INCONCLUSIVE · ADVISORY", "#eaf1fc", COLORS["blue"]),
+            }
+            label, background, foreground = labels.get(
+                assessment, ("INCONCLUSIVE · ADVISORY", "#eaf1fc", COLORS["blue"])
+            )
+            self.ai_assessment.set_text(label)
+            self.ai_assessment.style(
+                f"background-color:{background} !important;color:{foreground} !important"
+            )
+            self.ai_status.set_text("Qwen3 summary ready · the operator decides")
+            with self.explanation_container:
+                ui.label(
+                    _text(result.get("commander_summary_en"), _text(result.get("summary")))
+                ).classes("soc-explanation-text text-sm whitespace-pre-wrap")
+                self._explanation_section("UNCERTAINTY", _text(result.get("uncertainty")))
+                evidence = result.get("evidence", [])
+                if evidence:
+                    self._explanation_section(
+                        "SUPPORTING EVIDENCE",
+                        " · ".join(f"{key}: {evidence_refs.get(key, key)}" for key in evidence),
+                    )
+                recommendations = result.get("recommendations", [])
+                if recommendations:
+                    ui.label("OPERATOR CHECKS").classes("text-xs font-bold").style(
+                        f"color:{COLORS['navy']}"
+                    )
+                    for step in recommendations:
+                        ui.label(f"• {step}").classes("text-sm")
+                ui.label(
+                    "Advisory only. Detection and priority are determined by SOC rules; no response action is automatic."
+                ).classes("text-xs").style(f"color:{COLORS['muted']}")
+            return
+
+        self.ai_assessment.set_text("ADVISORY")
+        self.ai_assessment.style(f"background:#eaf1fc;color:{COLORS['blue']}")
+        if error:
+            self.ai_status.set_text(error)
+        elif self._qwen_config_is_verified():
+            self.ai_status.set_text("Qwen3 is generating locally; the dashboard remains available.")
+        else:
+            self.ai_status.set_text(self.qwen_message)
+        with self.explanation_container:
+            if self._qwen_config_is_verified() and not error:
+                ui.label("Generating the incident explanation…").classes("text-sm").style(
+                    f"color:{COLORS['muted']}"
+                )
+            else:
+                ui.label(instant_overview(incident)).classes(
+                    "soc-explanation-text text-sm whitespace-pre-wrap"
+                )
+            if error:
+                ui.label(error).classes("text-xs").style(f"color:{COLORS['amber']}")
+        if self._qwen_config_is_verified() and incident_id not in self.qwen_in_flight:
+            asyncio.create_task(self._generate_explanation(incident))
+
+    def _explanation_section(self, title: str, text: str) -> None:
+        ui.label(title).classes("text-xs font-bold").style(f"color:{COLORS['navy']}")
+        ui.label(text).classes("soc-explanation-text text-sm whitespace-pre-wrap")
+
+    def _qwen_config_is_verified(self) -> bool:
+        current = (
+            str(self.url_input.value or "").strip(),
+            str(self.model_input.value or "").strip(),
+        )
+        return self.qwen_ready and current == self.checked_qwen_config
+
+    def _on_qwen_config_change(self, event: Any) -> None:
+        if event is None:
+            return
+        if self.checked_qwen_config is None:
+            return
+        current = (
+            str(self.url_input.value or "").strip(),
+            str(self.model_input.value or "").strip(),
+        )
+        if current == self.checked_qwen_config:
+            return
+        self.qwen_ready = False
+        self.qwen_message = "Settings changed. Test Qwen to verify this endpoint and model."
+        self.qwen_status.set_text(self.qwen_message)
+        self.ai_status.set_text(self.qwen_message)
+        self.model_badge.set_text("QWEN3 · TEST NEEDED")
+        self.model_badge.style("background:#203f5b;color:#dce8f2")
+        if self.selected_incident_id:
+            self._render_selected_incident()
+
+    async def test_qwen(self) -> None:
+        if self.qwen_checking:
+            return
+        base_url = str(self.url_input.value or "").strip()
+        model = str(self.model_input.value or "").strip()
+        if not base_url or not model:
+            self.qwen_ready = False
+            self.checked_qwen_config = (base_url, model)
+            self.qwen_message = "Enter both an Ollama URL and a model name."
+            self.qwen_status.set_text(self.qwen_message)
+            self.model_badge.set_text("QWEN3 · CONFIG NEEDED")
+            self.model_badge.style("background:#8a5a18;color:white")
+            return
+        self.qwen_checking = True
+        self.qwen_ready = False
+        self.test_qwen_button.disable()
+        self.url_input.disable()
+        self.model_input.disable()
+        self.model_badge.set_text("QWEN3 · CHECKING")
+        self.model_badge.style("background:#203f5b;color:#dce8f2")
+        self.qwen_message = f"Checking {model} at {base_url}…"
+        self.qwen_status.set_text(self.qwen_message)
+        try:
+            await asyncio.to_thread(check_ollama_model, base_url, model)
+        except (OllamaError, ValueError) as exc:
+            log.exception("Qwen endpoint check failed")
+            self.qwen_message = str(exc)
+            self.model_badge.set_text("QWEN3 · UNAVAILABLE")
+            self.model_badge.style("background:#8a5a18;color:white")
+        else:
+            self.qwen_ready = True
+            self.checked_qwen_config = (base_url, model)
+            self.qwen_message = f"{model} is installed and reachable at {base_url}."
+            self.model_badge.set_text("QWEN3 · READY")
+            self.model_badge.style(f"background:{COLORS['green']};color:white")
+        finally:
+            self.qwen_checking = False
+            self.test_qwen_button.enable()
+            self.url_input.enable()
+            self.model_input.enable()
+            self.qwen_status.set_text(self.qwen_message)
+            if self.selected_incident_id:
+                self._render_selected_incident()
+
+    async def _generate_explanation(self, incident: Record) -> None:
+        incident_id = str(incident.get("id", "incident"))
+        if incident_id in self.qwen_in_flight or not self._qwen_config_is_verified():
+            return
+        self.qwen_in_flight.add(incident_id)
+        snapshot = self.snapshot
+        if snapshot is None:
+            self.qwen_in_flight.discard(incident_id)
+            return
+        base_url = str(self.url_input.value or "").strip()
+        model = str(self.model_input.value or "").strip()
+        self.qwen_errors.pop(incident_id, None)
+        try:
+            result, evidence_refs = await asyncio.to_thread(
+                self._analyze_incident,
+                incident,
+                snapshot,
+                base_url,
+                model,
+            )
+        except (AnalysisError, OllamaError, ValueError) as exc:
+            log.exception("Qwen incident explanation failed")
+            self.qwen_errors[incident_id] = f"Qwen unavailable: {exc}"
+        else:
+            self.qwen_results[incident_id] = (result, evidence_refs)
+        finally:
+            self.qwen_in_flight.discard(incident_id)
+            if not self._client.is_deleted and self.selected_incident_id == incident_id:
+                self._render_selected_incident()
+
+    @staticmethod
+    def _analyze_incident(
+        incident: Record,
+        snapshot: DashboardSnapshot,
+        base_url: str,
+        model: str,
+    ) -> tuple[Record, dict[str, str]]:
+        payload, evidence_refs = build_dashboard_incident(
+            incident,
+            snapshot.threat_findings,
+            snapshot.sources,
+            snapshot.advisories,
+        )
+        result = analyze_incident(
+            payload,
+            base_url=base_url,
+            model=model,
+            timeout=240,
+            retries=0,
+        )
+        return result, evidence_refs
+
+    async def regenerate_explanation(self) -> None:
+        if not self.selected_incident_id:
+            return
+        if not self._qwen_config_is_verified():
+            await self.test_qwen()
+            if not self._qwen_config_is_verified():
+                return
+        incident = next(
+            (
+                item for item in self.incidents
+                if str(item.get("id", "")) == self.selected_incident_id
+            ),
+            None,
+        )
+        if incident is None:
+            return
+        self.qwen_results.pop(self.selected_incident_id, None)
+        self.qwen_errors.pop(self.selected_incident_id, None)
+        await self._generate_explanation(incident)
+
+    def select_incident(self, incident_id: str) -> None:
+        self.selected_incident_id = incident_id
+        self._render_priority_queue()
+        self._render_selected_incident()
 
     def _source_warning(self, source: Record) -> str:
         gaps = source.get("silent") or []
@@ -614,417 +881,92 @@ class DashboardApp:
             for gap in gaps
             if isinstance(gap, dict) and gap.get("minutes") is not None
         ]
-        return f"SILENT {max(minutes)}m" if minutes else "SILENT"
+        return f"SILENT {_format_elapsed_minutes(max(minutes))}" if minutes else "SILENT"
 
-    def _render_agent_status(self, snapshot: DashboardSnapshot) -> None:
-        osint = f"OSINT {len(snapshot.threat_findings)} finding(s)" if snapshot.threat_findings else "OSINT pending"
-        briefings = f"Briefings {len(snapshot.advisories)}" if snapshot.advisories else "Member 3 pending"
-        self.agent_status_var.set(f"{osint}   ·   {briefings}   ·   VMware logs via selected source folder")
+    def open_alert_history(self) -> None:
+        self.alert_dialog.open()
 
-    def _show_incident(self, index: int) -> None:
-        if not 0 <= index < len(self.incidents):
-            return
-        self._selected_index = index
-        incident = self.incidents[index]
-        incident_id = str(incident.get("id", "incident"))
-        priority = str(incident.get("priority", "—"))
-        self.incident_title.configure(text=_text(incident.get("title"), incident_id))
-        priority_colors = {
-            "P1": (COLORS["red_pale"], COLORS["red"]),
-            "P2": (COLORS["amber_pale"], COLORS["amber"]),
-            "P3": (COLORS["blue_pale"], COLORS["blue"]),
-        }
-        bg, fg = priority_colors.get(priority, (COLORS["blue_pale"], COLORS["blue"]))
-        self.priority_badge.configure(text=f"{priority}  ·  SCORE {incident.get('score', '—')}", bg=bg, fg=fg)
-        confidence = incident.get("confidence")
-        confidence_text = f"{confidence:.0%}" if isinstance(confidence, (int, float)) else _text(confidence)
-        self.incident_meta_var.set(
-            f"{incident_id}   ·   {_when(incident.get('start'))} – {_when(incident.get('end'), '%H:%M UTC')}   ·   "
-            f"confidence {confidence_text}"
+    def open_source_logs(self) -> None:
+        incident = next(
+            (
+                item for item in self.incidents
+                if str(item.get("id", "")) == self.selected_incident_id
+            ),
+            None,
         )
-        self.instant_overview_var.set(instant_overview(incident))
-        self._render_attack_path(incident)
-        self._render_timeline(incident)
-        self.raw_evidence_button.configure(state="normal")
-        self._render_ai_summary(incident)
-
-    def _render_attack_path(self, incident: Record) -> None:
-        for child in self.attack_path.winfo_children():
-            child.destroy()
-        stages = incident.get("stages", [])
-        if not stages:
-            tk.Label(
-                self.attack_path,
-                text="No attack stages mapped",
-                bg=COLORS["surface"],
-                fg=COLORS["muted"],
-                font=("Segoe UI", 9),
-            ).pack(anchor="w")
+        if incident is None:
             return
-        for index, stage in enumerate(stages):
-            chip = tk.Label(
-                self.attack_path,
-                text=str(stage).upper(),
-                bg=COLORS["blue_pale"] if index == 0 else COLORS["teal_pale"],
-                fg=COLORS["blue"] if index == 0 else COLORS["teal"],
-                padx=10,
-                pady=6,
-                font=("Segoe UI", 8, "bold"),
-            )
-            chip.pack(side="left", padx=(0, 8))
-            if index < len(stages) - 1:
-                tk.Label(
-                    self.attack_path,
-                    text="›",
-                    bg=COLORS["surface"],
-                    fg=COLORS["muted"],
-                    font=("Segoe UI", 14, "bold"),
-                ).pack(side="left", padx=(0, 8))
-        techniques = incident.get("attack", [])
-        if techniques:
-            text = "  ·  ".join(str(item.get("id", "")) for item in techniques[:6])
-            tk.Label(
-                self.attack_path,
-                text=f"ATT&CK  {text}",
-                bg=COLORS["surface"],
-                fg=COLORS["muted"],
-                font=("Segoe UI", 9),
-            ).pack(side="left", padx=(10, 0))
-
-    def _render_timeline(self, incident: Record) -> None:
-        self.timeline_tree.delete(*self.timeline_tree.get_children())
-        for index, alert in enumerate(sorted(incident.get("alerts", []), key=lambda item: str(item.get("time", "")))):
-            evidence = alert.get("evidence") or []
-            summary = _text(alert.get("text"), _text(alert.get("rule")))
-            if len(summary) > 160:
-                summary = summary[:157] + "..."
-            self.timeline_tree.insert(
-                "",
-                "end",
-                values=(
-                    _when(alert.get("time"), "%H:%M:%S"),
-                    _text(alert.get("stage"), "alert"),
-                    _text(alert.get("rule")),
-                    f"{summary}  ·  {len(evidence)} evidence line(s)",
-                ),
-                tags=("odd",) if index % 2 else (),
-            )
-
-    def _render_ai_summary(self, incident: Record) -> None:
-        incident_id = str(incident.get("id", "incident"))
-        result = self.ai_explanations.get(incident_id)
-        if result:
-            self._show_ai_result(result)
-            return
-        error = self.ai_errors.get(incident_id)
-        if error:
-            self.ai_assessment_label.configure(
-                text="AI UNAVAILABLE",
-                bg=COLORS["amber_pale"],
-                fg=COLORS["amber"],
-            )
-            self.ai_status_var.set(error)
-            self._write_ai_text(instant_overview(incident), tag="warning")
-            return
-
-        self.ai_assessment_label.configure(
-            text="ANALYZING" if self._local_ai_ready else "WAITING",
-            bg=COLORS["blue_pale"],
-            fg=COLORS["blue"],
-        )
-        if self._local_ai_ready:
-            self.ai_status_var.set("Qwen3 is creating a short advisory summary in the background.")
-        else:
-            self.ai_status_var.set(self._local_ai_message)
-        self._write_ai_text(instant_overview(incident), tag="muted")
-        if self._local_ai_ready:
-            self._start_ai_summary(incident)
-
-    def _write_ai_text(self, text: str, tag: str = "") -> None:
-        self.ai_summary_text.configure(state="normal")
-        self.ai_summary_text.delete("1.0", "end")
-        self.ai_summary_text.insert("1.0", text, tag)
-        self.ai_summary_text.configure(state="disabled")
-
-    def _start_ai_summary(self, incident: Record, force: bool = False) -> None:
-        if self.snapshot is None or not self._local_ai_ready:
-            return
-        incident_id = str(incident.get("id", "incident"))
-        if incident_id in self.ai_explanations and not force:
-            return
-        if self._ai_request is not None:
-            self.ai_status_var.set("Qwen3 is finishing the current summary; this incident will follow.")
-            return
-        self.ai_errors.pop(incident_id, None)
-        request = (self._snapshot_generation, incident_id)
-        self._ai_request = request
-        self.ai_assessment_label.configure(
-            text="ANALYZING",
-            bg=COLORS["blue_pale"],
-            fg=COLORS["blue"],
-        )
-        self.ai_status_var.set("Qwen3 is creating a short local summary…")
-        self._write_ai_text(instant_overview(incident), tag="muted")
-        threading.Thread(
-            target=self._ai_summary_in_background,
-            args=(request, self.snapshot, incident),
-            daemon=True,
-        ).start()
-
-    def _ai_summary_in_background(
-        self,
-        request: tuple[int, str],
-        snapshot: DashboardSnapshot,
-        incident: Record,
-    ) -> None:
-        try:
-            from AI_Log_Analyzer.ai_log_analyzer import (
-                AnalysisError,
-                DEFAULT_MODEL,
-                OllamaError,
-                analyze_incident,
-                build_dashboard_incident,
-                configured_ollama_url,
-            )
-
-            ollama_url = configured_ollama_url()
-            payload, evidence_refs = build_dashboard_incident(
-                incident,
-                snapshot.threat_findings,
-                snapshot.sources,
-                snapshot.advisories,
-            )
-            result = analyze_incident(
-                payload,
-                base_url=ollama_url,
-                model=DEFAULT_MODEL,
-                timeout=240,
-                retries=0,
-            )
-        except ImportError as exc:
-            self.root.after(0, self._ai_summary_failed, request, f"AI dependencies missing: {exc}")
-            return
-        except (ValueError, OllamaError, AnalysisError) as exc:
-            self.root.after(0, self._ai_summary_failed, request, str(exc))
-            return
-        self.root.after(0, self._ai_summary_ready, request, result, evidence_refs)
-
-    def _ai_summary_failed(self, request: tuple[int, str], error: str) -> None:
-        if self._ai_request == request:
-            self._ai_request = None
-        generation, incident_id = request
-        if generation != self._snapshot_generation:
-            self._start_selected_summary()
-            return
-        clean_error = error.splitlines()[0][:180]
-        self.ai_errors[incident_id] = f"Qwen3 unavailable: {clean_error}"
-        if self._selected_index is not None:
-            selected = self.incidents[self._selected_index]
-            if str(selected.get("id", "incident")) == incident_id:
-                self._render_ai_summary(selected)
-            else:
-                self._start_selected_summary()
-
-    def _ai_summary_ready(
-        self,
-        request: tuple[int, str],
-        result: Record,
-        evidence_refs: dict[str, str],
-    ) -> None:
-        if self._ai_request == request:
-            self._ai_request = None
-        generation, incident_id = request
-        if generation != self._snapshot_generation:
-            self._start_selected_summary()
-            return
-        self.ai_explanations[incident_id] = {**result, "evidence_refs": evidence_refs}
-        if self._selected_index is not None:
-            selected = self.incidents[self._selected_index]
-            if str(selected.get("id", "incident")) == incident_id:
-                self._show_ai_result(self.ai_explanations[incident_id])
-            else:
-                self._start_selected_summary()
-
-    def _start_selected_summary(self) -> None:
-        if self._selected_index is not None:
-            self._render_ai_summary(self.incidents[self._selected_index])
-
-    def _show_ai_result(self, result: Record) -> None:
-        assessment = result.get("triage_assessment", "inconclusive")
-        label_data = {
-            "likely_suspicious": ("LIKELY SUSPICIOUS · ADVISORY", COLORS["red_pale"], COLORS["red"]),
-            "possibly_authorized_or_benign": ("POSSIBLY BENIGN · ADVISORY", COLORS["amber_pale"], COLORS["amber"]),
-            "inconclusive": ("INCONCLUSIVE · ADVISORY", COLORS["blue_pale"], COLORS["blue"]),
-        }
-        label, background, foreground = label_data.get(
-            assessment,
-            ("INCONCLUSIVE · ADVISORY", COLORS["blue_pale"], COLORS["blue"]),
-        )
-        self.ai_assessment_label.configure(text=label, bg=background, fg=foreground)
-        self.ai_status_var.set("Qwen3 summary ready · the operator decides")
-        lines: list[tuple[str, str]] = [
-            (_text(result.get("commander_summary_en"), _text(result.get("summary"), "No summary was returned.")), "normal"),
-            ("", "normal"),
-            ("UNCERTAINTY", "section"),
-            (_text(result.get("uncertainty"), "No uncertainty statement was returned."), "muted"),
-        ]
-        evidence = result.get("evidence", [])
-        references = result.get("evidence_refs", {})
-        if evidence:
-            lines.extend(
-                [
-                    ("", "normal"),
-                    ("SUPPORTING EVIDENCE GROUPS", "section"),
-                    ("  ·  ".join(f"{key}: {references.get(key, key)}" for key in evidence), "muted"),
-                ]
-            )
-        recommendations = result.get("recommendations", [])
-        if recommendations:
-            lines.extend([("", "normal"), ("OPERATOR CHECKS", "section")])
-            lines.extend((f"• {step}", "normal") for step in recommendations)
-        lines.extend(
-            [
-                ("", "normal"),
-                ("Advisory only. This does not change deterministic detection or incident priority.", "muted"),
+        self.source_log_container.clear()
+        with self.source_log_container:
+            evidence = [
+                (alert, item)
+                for alert in incident.get("alerts", [])
+                for item in alert.get("evidence", [])
             ]
-        )
-        self.ai_summary_text.configure(state="normal")
-        self.ai_summary_text.delete("1.0", "end")
-        for text, tag in lines:
-            self.ai_summary_text.insert("end", text + "\n", tag)
-        self.ai_summary_text.configure(state="disabled")
-
-    def _on_incident_select(self, _event: tk.Event) -> None:
-        selection = self.incident_tree.selection()
-        if selection:
-            self._show_incident(int(selection[0]))
-
-    def _check_local_ai_in_background(self) -> None:
-        try:
-            from AI_Log_Analyzer.ai_log_analyzer import (
-                DEFAULT_MODEL,
-                OllamaError,
-                check_ollama_model,
-                configured_ollama_url,
-            )
-
-            check_ollama_model(configured_ollama_url(), DEFAULT_MODEL)
-        except ImportError as exc:
-            self.root.after(0, self._set_local_ai_status, f"Dependencies missing: {exc}", False)
-        except OllamaError as exc:
-            self.root.after(0, self._set_local_ai_status, str(exc), False)
-        else:
-            self.root.after(0, self._set_local_ai_status, f"{DEFAULT_MODEL} ready · configured endpoint", True)
-
-    def _set_local_ai_status(self, message: str, ready: bool) -> None:
-        self._local_ai_ready = ready
-        self._local_ai_message = message
-        self.model_status_var.set(
-            f"QWEN3 · READY" if ready else "QWEN3 · UNAVAILABLE"
-        )
-        self.model_status_label.configure(
-            bg=COLORS["teal"] if ready else "#8a5a18",
-            fg=COLORS["surface"],
-        )
-        self.ai_status_var.set(message)
-        if ready:
-            self._start_selected_summary()
-        elif self._selected_index is not None:
-            self._render_ai_summary(self.incidents[self._selected_index])
-
-    def _regenerate_summary(self) -> None:
-        if self._selected_index is None:
-            return
-        if not self._local_ai_ready:
-            self.ai_status_var.set("Checking local Qwen3 availability…")
-            threading.Thread(target=self._check_local_ai_in_background, daemon=True).start()
-            return
-        self._start_ai_summary(self.incidents[self._selected_index], force=True)
-
-    def _show_source_logs(self) -> None:
-        if self._selected_index is None:
-            return
-        incident = self.incidents[self._selected_index]
-        window = tk.Toplevel(self.root)
-        window.title(f"Source evidence · {incident.get('id', 'incident')}")
-        window.geometry("980x620")
-        window.minsize(720, 440)
-        window.configure(bg=COLORS["background"])
-        tk.Label(
-            window,
-            text="RAW SOURCE EVIDENCE",
-            bg=COLORS["background"],
-            fg=COLORS["ink"],
-            anchor="w",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(fill="x", padx=18, pady=(16, 5))
-        tk.Label(
-            window,
-            text="Read-only logs for operator verification. No response actions are available here.",
-            bg=COLORS["background"],
-            fg=COLORS["muted"],
-            anchor="w",
-            font=("Segoe UI", 9),
-        ).pack(fill="x", padx=18, pady=(0, 10))
-        output = tk.Text(
-            window,
-            bg=COLORS["surface"],
-            fg=COLORS["ink"],
-            relief="flat",
-            wrap="word",
-            padx=14,
-            pady=12,
-            font=("Consolas", 9),
-            state="normal",
-        )
-        output.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-        for alert in sorted(incident.get("alerts", []), key=lambda item: str(item.get("time", ""))):
-            output.insert(
-                "end",
-                f"{_when(alert.get('time'))}  {alert.get('rule', 'rule')}  {alert.get('text', '')}\n",
-            )
-            for item in alert.get("evidence", []):
-                output.insert(
-                    "end",
-                    f"  {item.get('source', 'source')}:{item.get('line', '?')}  "
-                    f"{item.get('raw', item.get('id', ''))}\n",
-                )
-            output.insert("end", "\n")
-        output.configure(state="disabled")
+            if not evidence:
+                ui.label("No raw evidence was attached to this incident.")
+            for alert, item in evidence:
+                with ui.card().classes("w-full p-3").style(
+                    "border:1px solid #e6ebf1;border-radius:12px;box-shadow:none"
+                ):
+                    ui.label(
+                        f"{_when(alert.get('time'))} · {_text(item.get('source'))}:"
+                        f"{_text(item.get('line'))}"
+                    ).classes("text-xs font-bold").style(f"color:{COLORS['muted']}")
+                    ui.label(_text(item.get("raw"))).classes(
+                        "text-sm whitespace-pre-wrap font-mono"
+                    )
+        self.source_dialog.open()
 
 
-def _enable_windows_dpi_awareness() -> None:
-    if sys.platform != "win32":
-        return
-    import ctypes
-
-    user32 = ctypes.windll.user32
-    try:
-        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
-            return
-    except AttributeError:
-        pass
-    try:
-        if ctypes.windll.shcore.SetProcessDpiAwareness(2) == 0:
-            return
-    except AttributeError:
-        pass
-    user32.SetProcessDPIAware()
-
-
-def main() -> None:
-    _enable_windows_dpi_awareness()
-    parser = argparse.ArgumentParser(description="Run the local Cyber Sentinels desktop dashboard.")
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Run the local Cyber Sentinels NiceGUI dashboard.")
     parser.add_argument(
         "--logs",
         type=Path,
-        default=ROOT / "backend" / "soc" / "sample_logs",
+        default=DEFAULT_LOGS,
         help="Folder containing SOC logs and sources.yaml/assets.yaml/maintenance.yaml.",
     )
-    args = parser.parse_args()
-    root = tk.Tk()
-    DashboardApp(root, SocPipelineProvider(args.logs.resolve()))
-    root.mainloop()
+    parser.add_argument("--csv", type=Path, help="CSV attack dataset to replay as live telemetry.")
+    parser.add_argument("--csv-batch", type=int, default=30, help="CSV rows processed per refresh.")
+    parser.add_argument("--csv-interval", type=int, default=2, help="Seconds between CSV refreshes.")
+    parser.add_argument("--host", default="127.0.0.1", help="Dashboard bind address (default: localhost).")
+    parser.add_argument("--port", type=int, default=8080, help="Dashboard port.")
+    args = parser.parse_args(argv)
+    if args.csv:
+        csv_path = args.csv.resolve()
+        if not csv_path.is_file():
+            parser.error(f"CSV file not found: {csv_path}")
+        provider: DashboardProvider = CsvSimulationProvider(
+            csv_path,
+            batch_size=max(1, args.csv_batch),
+            interval_seconds=max(1, args.csv_interval),
+        )
+        refresh_seconds = max(1, args.csv_interval)
+    else:
+        log_path = args.logs.resolve()
+        _ensure_default_fleet_logs(log_path)
+        if not log_path.is_dir():
+            parser.error(f"SOC log directory not found: {log_path}")
+        provider = IntegratedAgentProvider(log_path)
+        refresh_seconds = None
+
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        log.warning(
+            "The dashboard has no authentication. Bind only on a trusted private network and do not port-forward it."
+        )
+
+    @ui.page("/")
+    def dashboard() -> None:
+        DashboardPage(provider, refresh_seconds)
+
+    ui.run(
+        title="Cyber Sentinels | Incident Operations",
+        host=args.host,
+        port=args.port,
+        reload=False,
+        show=True,
+    )
 
 
 if __name__ == "__main__":

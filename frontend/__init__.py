@@ -1,1 +1,1 @@
-"""Local desktop dashboard for Cyber Sentinels."""
+"""Local NiceGUI dashboard for Cyber Sentinels."""

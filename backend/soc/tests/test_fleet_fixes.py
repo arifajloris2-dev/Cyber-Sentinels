@@ -72,6 +72,13 @@ def test_a_flood_of_weak_alerts_is_not_an_incident():
     assert not incidents and len(singles) == 50
 
 
+def test_numeric_asset_criticality_contributes_to_incident_score():
+    alert = _alert("NET-004", 8, ["web"])
+    assets = {"assets": [{"host": "web", "criticality": 4}]}
+    incidents, _ = correlate([alert], assets, [], T0 + timedelta(hours=1))
+    assert incidents[0]["score"] == 25
+
+
 # ----------------------------------------------------------------- 3. source health
 def _stats(name, times):
     return [{"source": name, "host": "h", "times": times}]

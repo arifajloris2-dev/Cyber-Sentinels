@@ -72,9 +72,10 @@ See `soc/collect/README.md` for the one-time setup on each machine.
 | NET-001 | New outbound connection to an internal machine | T1021 |
 | NET-002 | New inbound connection accepted (outside visitors on a port in `public_services` are normal) | T1021 |
 | NET-003 | 20+ blocked connections from one address in 10 min | T1046 |
-| NET-004 | Workstation connects straight to the internet, not via the proxy | T1071.001 |
+| NET-004 | Possible bot swarm: 8+ distinct blocked sources target one system in 2 min | T1498 |
 | NET-005 | Beaconing: 6+ connections from a workstation to one internet address in 60 min (sensor) | T1071.001, T1573 |
 | NET-006 | Traffic to an internal service port never used in the baseline (sensor) | T1571 |
+| NET-007 | Workstation connects straight to the internet, not via the proxy | T1071.001 |
 | PROC-001 | Office application starts PowerShell/cmd/script host (Sysmon) | T1204.002, T1059.001 |
 | PROC-002 | Encoded or hidden PowerShell command (Sysmon) | T1059.001 |
 | PROC-003 | Scheduled task created by a user account (Windows 4698) | T1053.005 |
@@ -88,8 +89,9 @@ See `soc/collect/README.md` for the one-time setup on each machine.
 
 "New" / "never before" means: not seen during the baseline (the first 24 h of logs). Night hours raise the severity.
 
-**Add a rule:** add it to a YAML file in `soc/rules/`. Four types: `match` (one event), `threshold` (N events in a
-window), `sequence` (steps in order, same values), `new_value` (never seen in the baseline). No code needed.
+**Add a rule:** add it to a YAML file in `soc/rules/`. Types include `match` (one event), `threshold` (N events in a
+window), `distinct_threshold` (N unique values for one target), `sequence` (steps in order, same values), and
+`new_value` (never seen in the baseline). No code needed.
 
 **Add a log type:** write one `parse_...` function in `soc/parsers.py` and add it to `PARSERS`.
 

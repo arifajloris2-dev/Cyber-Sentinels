@@ -197,7 +197,10 @@ def _ev(n, outcome, logon, ip):
 
 def test_rule_files_are_valid():
     rules = load_rules(RULES_DIR)
-    assert len(rules) >= 12 and all(r["type"] in ("match", "threshold", "sequence", "new_value") for r in rules)
+    assert len(rules) >= 12 and all(
+        r["type"] in ("match", "threshold", "distinct_threshold", "sequence", "new_value")
+        for r in rules
+    )
 
 
 def test_conditions():
@@ -217,3 +220,43 @@ def test_remote_failures_then_success_is_detected():
     enrich(evs, {})
     hits = [a for a in run_rules(evs, load_rules(RULES_DIR), evs[0]["time"] - timedelta(hours=1)) if a["rule"] == "AUTH-001"]
     assert len(hits) == 1 and hits[0]["count"] == 3
+
+
+def test_bot_swarm_from_many_sources_is_one_incident():
+    from soc.correlate import correlate
+
+    start = datetime(2026, 11, 18, 2, tzinfo=timezone.utc)
+    events = [
+        {
+            "id": f"swarm:{n}",
+            "time": start + timedelta(seconds=n),
+            "source": "swarm",
+            "file": "traffic.log",
+            "line": n + 1,
+            "raw": f"row {n}",
+            "host": "gateway",
+            "type": "network",
+            "action": "block",
+            "direction": "inbound",
+            "src_ip": f"198.51.100.{n + 1}",
+            "dst_ip": "10.0.0.10",
+            "user": None,
+        }
+        for n in range(10)
+    ]
+    enrich(events, {"assets": [{"host": "gateway", "ip": "10.0.0.10", "criticality": "high"}]})
+    alerts = run_rules(events, load_rules(RULES_DIR), start - timedelta(hours=1))
+    swarm_alerts = [alert for alert in alerts if alert["rule"] == "NET-004"]
+
+    incidents, singles = correlate(
+        swarm_alerts,
+        {"assets": [{"host": "gateway", "ip": "10.0.0.10", "criticality": "high"}]},
+        [],
+        start + timedelta(seconds=10),
+    )
+
+    assert len(swarm_alerts) == 1
+    assert swarm_alerts[0]["distinct_source_count"] == 10
+    assert len(incidents) == 1
+    assert incidents[0]["attack"][0]["id"] == "T1498"
+    assert singles == []

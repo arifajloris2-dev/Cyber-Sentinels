@@ -36,17 +36,20 @@ rules:
     where: {type: network, action: block}
     text: "{count} connections from {src_ip} blocked by {host} between {first} and {last}"
 
-  # ---- traffic to the internet and network-sensor flows (Sysmon/host firewall + Zeek conn.log)
   - id: NET-004
-    type: new_value
-    short: direct internet connection
-    title: Workstation connected straight to the internet (not via the proxy)
-    attack: [T1071.001]
-    severity: 6
-    fields: [host, dst_ip]
-    where: {type: network, action: [allow, connect], direction: outbound, dst_internal: false, role|contains: workstation}
-    text: "{host} connected directly to {dst_ip} port {dst_port} at {first}: workstations normally use the proxy"
+    type: distinct_threshold
+    short: possible bot swarm
+    title: Possible bot swarm targeting one system
+    attack: [T1498]
+    severity: 8
+    group_by: [host, dst_ip]
+    distinct_by: [src_ip]
+    window_min: 2
+    min_distinct: 8
+    where: {type: network, action: block, direction: inbound}
+    text: "{distinct_source_count} different source addresses sent blocked traffic to {host} ({dst_ip}) within two minutes"
 
+  # ---- network-sensor flows (Zeek conn.log)
   - id: NET-005
     type: threshold
     short: beaconing to the internet
@@ -69,3 +72,13 @@ rules:
     fields: [dst_ip, dst_port]
     where: {type: network, action: flow, outcome: success, src_internal: true, dst_internal: true}
     text: "{src_ip} ({src_host}) -> {dst_ip} ({dst_host}) port {dst_port}: no traffic to this port during the baseline"
+
+  - id: NET-007
+    type: new_value
+    short: direct internet connection
+    title: Workstation connected straight to the internet (not via the proxy)
+    attack: [T1071.001]
+    severity: 6
+    fields: [host, dst_ip]
+    where: {type: network, action: [allow, connect], direction: outbound, dst_internal: false, role|contains: workstation}
+    text: "{host} connected directly to {dst_ip} port {dst_port} at {first}: workstations normally use the proxy"

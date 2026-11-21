@@ -1,8 +1,9 @@
 """Rule engine. Rules live in soc/rules/*.yaml; this file only knows how to run them.
 
-Four rule types (all deterministic, so the same logs always give the same alerts):
+Five rule types (all deterministic, so the same logs always give the same alerts):
   match      one event matches                                  e.g. a service was installed
   threshold  N or more matching events per group in a window    e.g. 5 failed logons in 10 min
+  distinct_threshold N or more distinct values for one target   e.g. many source IPs hitting one system
   sequence   steps in order, same field values, within a time   e.g. failed logons, then a success
   new_value  something never seen during the baseline           e.g. a laptop talks to a new machine
 
@@ -13,7 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -111,7 +112,13 @@ def load_rules(folder: Path) -> list[dict]:
 
 
 def run_rules(events: list[dict], rules: list[dict], baseline_end: datetime) -> list[dict]:
-    kinds = {"match": _match, "threshold": _threshold, "sequence": _sequence, "new_value": _new_value}
+    kinds = {
+        "match": _match,
+        "threshold": _threshold,
+        "distinct_threshold": _distinct_threshold,
+        "sequence": _sequence,
+        "new_value": _new_value,
+    }
     alerts = []
     for r in rules:
         alerts += kinds[r["type"]](r, events, baseline_end)
@@ -132,7 +139,7 @@ def make_alert(rule: dict, evs: list[dict], extra: dict | None = None) -> dict:
         "attack": rule["attack"], "time": evs[0]["time"], "time_end": last["time"],
         "hosts": sorted(hosts), "users": sorted({e["user"] for e in evs if e.get("user") and not e["system_user"]}),
         "unknown_ips": sorted({e["src_ip"] for e in evs if e.get("src_ip") and e.get("src_known") is False}),
-        "evidence": [show(e) for e in evs[:25]], "count": len(evs),
+        "evidence": [show(e) for e in evs[:25]], "count": len(evs), **(extra or {}),
     }
 
 
@@ -177,6 +184,53 @@ def _threshold(rule, events, _):
                 i = j + 1
             else:
                 i += 1
+    return out
+
+
+def _distinct_threshold(rule, events, _):
+    """Alert when enough unique values occur for one target inside a time window."""
+    window = timedelta(minutes=rule["window_min"])
+    need = rule["min_distinct"]
+    groups = defaultdict(list)
+    for event in events:
+        if matches(event, rule.get("where")) and (key := _key(event, rule["group_by"])) is not None:
+            groups[key].append(event)
+
+    out = []
+    for grouped_events in groups.values():
+        grouped_events.sort(key=lambda event: event["time"])
+        start = end = 0
+        values = Counter()
+        while start < len(grouped_events):
+            while end < len(grouped_events) and grouped_events[end]["time"] - grouped_events[start]["time"] <= window:
+                value = _key(grouped_events[end], rule["distinct_by"])
+                if value is not None:
+                    values[value] += 1
+                end += 1
+            if len(values) >= need:
+                evidence = grouped_events[start:end]
+                out.append(make_alert(
+                    rule,
+                    evidence,
+                    {
+                        "distinct_source_count": len(values),
+                        "detected_row_markers": [
+                            marker
+                            for event in evidence
+                            for marker in re.findall(r"CSV-ROW-\d+", event.get("raw", ""))
+                        ],
+                    },
+                ))
+                start = end
+                end = start
+                values.clear()
+            else:
+                value = _key(grouped_events[start], rule["distinct_by"])
+                if value is not None:
+                    values[value] -= 1
+                    if not values[value]:
+                        del values[value]
+                start += 1
     return out
 
 

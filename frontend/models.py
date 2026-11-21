@@ -1,4 +1,4 @@
-"""Shared data contract between the desktop dashboard and project agents."""
+"""Shared data contract between the dashboard and project agents."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,7 +18,7 @@ def _records(payload: Mapping[str, Any], key: str) -> list[Record]:
 
 @dataclass(frozen=True, slots=True)
 class DashboardSnapshot:
-    """One local dashboard refresh, independent of how each agent provides data."""
+    """One dashboard refresh, independent of how each agent provides data."""
 
     generated_at: datetime
     incidents: list[Record]
@@ -27,7 +27,9 @@ class DashboardSnapshot:
     singles: list[Record] = field(default_factory=list)
     maintenance: list[Record] = field(default_factory=list)
     threat_findings: list[Record] = field(default_factory=list)
+    hunt_requests: list[Record] = field(default_factory=list)
     advisories: dict[str, Record] = field(default_factory=dict)
+    evaluation: Record = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> DashboardSnapshot:
@@ -59,5 +61,7 @@ class DashboardSnapshot:
             singles=_records(payload, "singles"),
             maintenance=_records(payload, "maintenance"),
             threat_findings=_records(payload, "threat_findings"),
+            hunt_requests=_records(payload, "hunt_requests"),
             advisories=dict(advisories),
+            evaluation=dict(payload.get("evaluation", {})) if isinstance(payload.get("evaluation", {}), dict) else {},
         )

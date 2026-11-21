@@ -14,10 +14,10 @@ Infrastructure Leveraging AI*.
 
 | | |
 |---|---|
-| **Reads** | Windows (Security/System events, firewall log) and Ubuntu (auth, ufw, syslog, dpkg) logs |
-| **Detects** | 12 deterministic rules: failed→successful remote logons, password guessing, new internal connections, new services, firewall changes, cleared logs, new accounts |
+| **Reads** | Windows and Ubuntu host logs, plus optional Sysmon, Zeek network flows, and mail-gateway events |
+| **Detects** | Deterministic auth, network, endpoint, mail, and system rules, including multi-source bot-swarm signals |
 | **Filters noise** | Approved patching and backups (maintenance calendar) and a learned baseline of normal behaviour |
-| **Correlates** | Alerts sharing an account, host or unknown address in time → one incident: entry → lateral movement → impact |
+| **Correlates** | Related evidence across sources into incidents; weak alerts need a shared account or unknown address, not just a busy host |
 | **Explains** | Evidence down to the raw log line, MITRE ATT&CK mapping, confidence (lowered when a log source goes silent), suggested checks |
 | **Advises (local AI)** | Qwen3 via Ollama summarises the incident for the operator; it never decides what is an attack |
 | **Threat intel** | OSINT agent matches outside findings to the base's assets |
@@ -38,9 +38,9 @@ Infrastructure Leveraging AI*.
  AI_Log_Analyzer/ ─ local Qwen3 (Ollama) explanation, advisory only                     (Member 3)
         │
         ▼
- frontend/ ─ desktop dashboard (Tkinter): incidents, timeline, evidence, health          (Member 5)
+ frontend/ ─ local NiceGUI dashboard: incidents, timeline, evidence, health               (Member 5)
 
- simulation/ ─ isolated VMware lab, log generation and replay, test scenarios           (Member 4)
+ simulation/ ─ optional CSV replay; the repeatable synthetic fleet is under backend/soc/fleet/ (Member 4)
 ```
 
 ## Quick start
@@ -52,11 +52,14 @@ python -m venv .venv
 .venv\Scripts\activate                     # Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m frontend                         # desktop dashboard on the sample logs
-python backend/correlation.py backend/soc/sample_logs   # SOC report in backend/soc/sample_logs/out/
+python -m frontend                         # 50-device scenario at http://127.0.0.1:8080
+python backend/correlation.py backend/soc/sample_logs   # optional sample SOC report
+```
 
-# 50-device synthetic base (2 days, 4 attacks, maintenance, a silent log source):
-python backend/soc/fleet/make_fleet.py
+Optional end-to-end evaluation with the repeatable 50-device scenario:
+
+```powershell
+python backend/soc/fleet/make_fleet.py --no-ecs
 python -m frontend --logs backend/soc/fleet/logs
 ```
 
@@ -76,9 +79,10 @@ Settings are read from environment variables; see [.env.example](.env.example). 
 python -m pytest frontend/tests AI_Log_Analyzer/test_validation.py backend/soc/tests -q
 ```
 
-The same tests run on every push (GitHub Actions). They cover the challenge's success criteria: all attack steps in
-one incident, flagged in under 10 minutes, no false incidents without an attack, patching and backup suppressed,
-lower confidence when a log source is missing, and no automatic actions.
+The same tests run on every push (GitHub Actions). They verify all four planted fleet attacks become separate
+incidents, maintenance is suppressed, source-health gaps are visible, and there is at most one benign incident
+(the known mistyped-password look-alike). Run `python -m soc replay <log-folder>` with `PYTHONPATH=backend` to
+measure time from each incident's last event to flagging.
 
 ## Repository layout
 
@@ -87,8 +91,8 @@ lower confidence when a log source is missing, and no automatic actions.
 | [`backend/soc/`](backend/soc/README.md), `detection.py`, `correlation.py` | Member 2: SOC Detection & Correlation | Log parsers, rules, noise filter, correlation, log collectors, tests; [`backend/soc/fleet/`](backend/soc/fleet/README.md): 50-device synthetic base |
 | `backend/osint_agent.py`, `backend/data/` | Member 1: OSINT & Threat Intelligence | Threat findings, asset inventory, cached KEV/NVD data |
 | [`AI_Log_Analyzer/`](AI_Log_Analyzer/) | Member 3: Local AI & Incident Response | Local Ollama explanations, EN/SQ summaries, schema validation |
-| `simulation/` | Member 4: VMware Simulation & Testing | Isolated lab, log generation and replay, scenarios |
-| [`frontend/`](frontend/README.md), `backend/main.py` | Member 5: Dashboard & Integration | Desktop dashboard and integration |
+| `simulation/` | Member 4: Simulation & Testing | Optional CSV replay; VMware logs can be imported through `--logs` |
+| [`frontend/`](frontend/README.md), `backend/main.py` | Member 5: Dashboard & Integration | Local responsive dashboard and integration |
 
 ## Ground rules
 
