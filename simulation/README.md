@@ -2,7 +2,4 @@
 
 Mjedisi i izoluar, gjenerues/riluajtes logjesh & skenare testi.
 
-## Synthetic base
-
-[`fleet/`](fleet/README.md): 50 devices, 2 days of logs in the real formats, with attacks, harmless look-alikes,
-maintenance and a silent log source, plus an answer key (`truth.json`). Run `python simulation/fleet/make_fleet.py`.
+Synthetic 50-device test base for the SOC engine: [`backend/soc/fleet/`](../backend/soc/fleet/README.md).

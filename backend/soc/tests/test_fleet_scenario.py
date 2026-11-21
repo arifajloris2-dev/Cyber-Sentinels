@@ -1,4 +1,4 @@
-"""End-to-end test on the 50-device synthetic base (simulation/fleet/make_fleet.py), against its truth.json.
+"""End-to-end test on the 50-device synthetic base (backend/soc/fleet/make_fleet.py), against its truth.json.
 
 The generator builds 2 days of logs (Windows events/firewall/Sysmon, Ubuntu auth/ufw/syslog/dpkg, Zeek, mail gateway)
 with 4 planted attacks, 4 harmless look-alikes, approved maintenance and one log source that goes silent.
@@ -14,10 +14,10 @@ import pytest
 from soc.pipeline import run
 
 REPO = Path(__file__).resolve().parents[3]
-GENERATOR = REPO / "simulation" / "fleet" / "make_fleet.py"
+GENERATOR = REPO / "backend" / "soc" / "fleet" / "make_fleet.py"
 MAINTENANCE = ["patch", "backup", "change", "vulnscan", "emergency"]
 
-pytestmark = pytest.mark.skipif(not GENERATOR.exists(), reason="simulation/fleet/make_fleet.py not present")
+pytestmark = pytest.mark.skipif(not GENERATOR.exists(), reason="backend/soc/fleet/make_fleet.py not present")
 
 
 @pytest.fixture(scope="module")

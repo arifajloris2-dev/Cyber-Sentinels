@@ -101,7 +101,8 @@ window), `sequence` (steps in order, same values), `new_value` (never seen in th
 | `assets.yaml` | Known machines: host, IP, role, criticality (1–5); admin IPs; night hours; optional `internal_nets` (CIDRs, default the private ranges) and `public_services` (`[{host, ports}]`: ports a server offers to the internet on purpose) |
 | `maintenance.yaml` | Approved change tickets: hosts, time window, and what each is allowed to do |
 
-Start from the files in `soc/sample_logs/`. Later the machine list can come from `backend/data/assets.json` (Member 1).
+Start from the files in `soc/sample_logs/` (2 machines). For a full base (50 devices, 2 days, 4 attacks, maintenance, a
+silent log source, answer key) run `python backend/soc/fleet/make_fleet.py`: see [`fleet/README.md`](fleet/README.md). Later the machine list can come from `backend/data/assets.json` (Member 1).
 
 ## Output for the rest of the project
 

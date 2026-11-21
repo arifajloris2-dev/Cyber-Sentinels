@@ -2,7 +2,7 @@
 
 A test base for the whole pipeline. `make_fleet.py` writes two days of logs for 50 machines in the real formats our parsers read, with attacks, harmless look-alikes, approved maintenance and one log source that goes silent. Everything is generated locally and is the same on every run. It uses only `10.24.x.x`, reserved documentation IPs (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) and `.example` domains. No real data is used.
 
-The device list follows Member 1's inventory, [`backend/data/assets.json`](../../backend/data/assets.json):
+The device list follows Member 1's inventory, [`backend/data/assets.json`](../../data/assets.json):
 - Same names and IPs (`ws-base-014`, `srv-gate-ctrl-01`, `srv-auth-01`, `srv-backup-02`).
 - Their accounts exist.
 - If an IP clashes with another device, the generator stops with a clear message.
@@ -10,10 +10,10 @@ The device list follows Member 1's inventory, [`backend/data/assets.json`](../..
 ## Run it (from the repository root)
 
 ```bash
-python simulation/fleet/make_fleet.py                 # logs in simulation/fleet/logs (+ logs_ecs), ~5 s
-python simulation/fleet/check_logs.py                 # sanity checks
-python backend/correlation.py simulation/fleet/logs   # SOC report in simulation/fleet/logs/out/
-python -m frontend --logs simulation/fleet/logs       # dashboard on the 50-device base
+python backend/soc/fleet/make_fleet.py                 # logs in backend/soc/fleet/logs (+ logs_ecs), ~5 s
+python backend/soc/fleet/check_logs.py                 # sanity checks
+python backend/correlation.py backend/soc/fleet/logs   # SOC report in backend/soc/fleet/logs/out/
+python -m frontend --logs backend/soc/fleet/logs       # dashboard on the 50-device base
 ```
 
 Options: `--out DIR` (another folder), `--no-ecs` (skip the ECS copy), `--legacy` (only the six original sources in `sources.yaml`).

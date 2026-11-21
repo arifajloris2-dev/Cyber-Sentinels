@@ -56,8 +56,8 @@ python -m frontend                         # desktop dashboard on the sample log
 python backend/correlation.py backend/soc/sample_logs   # SOC report in backend/soc/sample_logs/out/
 
 # 50-device synthetic base (2 days, 4 attacks, maintenance, a silent log source):
-python simulation/fleet/make_fleet.py
-python -m frontend --logs simulation/fleet/logs
+python backend/soc/fleet/make_fleet.py
+python -m frontend --logs backend/soc/fleet/logs
 ```
 
 Optional local AI (offline):
@@ -84,10 +84,10 @@ lower confidence when a log source is missing, and no automatic actions.
 
 | Folder | Owner | Contents |
 |---|---|---|
-| [`backend/soc/`](backend/soc/README.md), `detection.py`, `correlation.py` | Member 2: SOC Detection & Correlation | Log parsers, rules, noise filter, correlation, log collectors, tests |
+| [`backend/soc/`](backend/soc/README.md), `detection.py`, `correlation.py` | Member 2: SOC Detection & Correlation | Log parsers, rules, noise filter, correlation, log collectors, tests; [`backend/soc/fleet/`](backend/soc/fleet/README.md): 50-device synthetic base |
 | `backend/osint_agent.py`, `backend/data/` | Member 1: OSINT & Threat Intelligence | Threat findings, asset inventory, cached KEV/NVD data |
 | [`AI_Log_Analyzer/`](AI_Log_Analyzer/) | Member 3: Local AI & Incident Response | Local Ollama explanations, EN/SQ summaries, schema validation |
-| `simulation/` | Member 4: VMware Simulation & Testing | Isolated lab, log generation and replay, scenarios; [`simulation/fleet/`](simulation/fleet/README.md): 50-device synthetic base |
+| `simulation/` | Member 4: VMware Simulation & Testing | Isolated lab, log generation and replay, scenarios |
 | [`frontend/`](frontend/README.md), `backend/main.py` | Member 5: Dashboard & Integration | Desktop dashboard and integration |
 
 ## Ground rules

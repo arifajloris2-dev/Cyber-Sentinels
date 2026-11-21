@@ -83,7 +83,7 @@ assert len(DEV) == 50
 
 # ---- keep the fleet in step with Member 1's asset inventory (backend/data/assets.json), so OSINT and SOC name the same
 # machines: same host, same IP, and their accounts exist. A clash (same IP on two different machines) stops the run.
-ASSETS_JSON = Path(__file__).resolve().parents[2] / "backend" / "data" / "assets.json"
+ASSETS_JSON = Path(__file__).resolve().parents[2] / "data" / "assets.json"   # backend/data/assets.json
 
 
 def align_with_inventory(devices: list[dict], path: Path = ASSETS_JSON) -> list[str]:
