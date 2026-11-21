@@ -30,6 +30,9 @@ class DashboardSnapshot:
     hunt_requests: list[Record] = field(default_factory=list)
     advisories: dict[str, Record] = field(default_factory=dict)
     evaluation: Record = field(default_factory=dict)
+    agents: list[Record] = field(default_factory=list)
+    events: list[Record] = field(default_factory=list)
+    assets: Record = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> DashboardSnapshot:
@@ -64,4 +67,7 @@ class DashboardSnapshot:
             hunt_requests=_records(payload, "hunt_requests"),
             advisories=dict(advisories),
             evaluation=dict(payload.get("evaluation", {})) if isinstance(payload.get("evaluation", {}), dict) else {},
+            agents=_records(payload, "agents"),
+            events=_records(payload, "events"),
+            assets=dict(payload.get("assets", {})) if isinstance(payload.get("assets", {}), dict) else {},
         )

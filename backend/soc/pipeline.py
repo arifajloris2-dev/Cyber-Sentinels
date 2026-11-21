@@ -72,6 +72,7 @@ def detect(folder: Path, until: datetime | None = None, loaded=None, rules_dir: 
     return {"alerts": alerts, "suppressed": suppressed, "maintenance": noise.summary(approved, suppressed, cfg["maintenance"]),
             "health": src_health, "stats": stats, "events": len(events),
             "agents": agents.summarise(events, alerts, suppressed, src_health, cfg["sources"], baseline_end, end),
+            "event_list": events,   # parsed + enriched events (in memory only: the dashboard search uses them)
             "rules": len(rules), "baseline_end": baseline_end, "end": end, "cfg": cfg, "seconds": round(time.perf_counter() - t0, 3)}
 
 

@@ -14,6 +14,14 @@ from backend.osint_agent import run_osint_agent
 from .models import DashboardSnapshot
 
 
+def _tag_agents(result: dict) -> list[dict]:
+    owner = {s.get("source"): s.get("agent") for s in result.get("stats", [])}
+    events = result.get("event_list") or []
+    for e in events:
+        e.setdefault("agent", owner.get(e.get("source")))
+    return events
+
+
 class DashboardProvider(Protocol):
     def load(self) -> DashboardSnapshot:
         """Return a complete snapshot or raise an error for the UI to report."""
@@ -37,6 +45,13 @@ class SocPipelineProvider:
                 "maintenance": result.get("maintenance", []),
                 # OSINT findings (Member 1) as matched by the SOC engine: shown in the agent status, passed to the AI
                 "threat_findings": (result.get("intel") or {}).get("findings", []),
+                # what each SOC agent saw (backend/soc/agents)
+                "agents": result.get("agents", []),
+                # parsed events for search and entity pages, tagged with the agent that read them
+                "events": _tag_agents(result),
+                "assets": (result.get("cfg") or {}).get("assets", {}),
+                # hunt requests as answered by the SOC (status: found in INC-..., or nothing in the logs)
+                "hunt_requests": (result.get("intel") or {}).get("hunts", []),
             }
         )
 
@@ -72,8 +87,11 @@ class IntegratedAgentProvider(SocPipelineProvider):
             alerts=soc_snapshot.alerts,
             singles=soc_snapshot.singles,
             maintenance=soc_snapshot.maintenance,
-            threat_findings=osint_result["structured_threat_findings"],
-            hunt_requests=osint_result["targeted_hunt_requests"],
+            threat_findings=soc_snapshot.threat_findings or osint_result["structured_threat_findings"],
+            hunt_requests=soc_snapshot.hunt_requests or osint_result["targeted_hunt_requests"],
+            agents=soc_snapshot.agents,
+            events=soc_snapshot.events,
+            assets=soc_snapshot.assets,
         )
 
 
@@ -193,4 +211,7 @@ class CsvSimulationProvider(IntegratedAgentProvider):
             hunt_requests=snapshot.hunt_requests,
             advisories=snapshot.advisories,
             evaluation=evaluation,
+            agents=snapshot.agents,
+            events=snapshot.events,
+            assets=snapshot.assets,
         )
