@@ -272,6 +272,7 @@ class DashboardPage:
         self.incidents: list[Record] = []
         self.selected_incident_id: str | None = None
         self.loading = False
+        self.refresh_pending = False
         self.qwen_ready = False
         self.qwen_checking = False
         self.qwen_message = "Checking local Qwen3…"
@@ -297,9 +298,9 @@ class DashboardPage:
         self.ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
         self.ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
         self._build()
-        ui.timer(0.1, self.refresh, once=True)
+        ui.timer(0.1, lambda: self.refresh(), once=True)
         if self.refresh_seconds is not None:
-            ui.timer(self.refresh_seconds, self.refresh)
+            ui.timer(self.refresh_seconds, lambda: self.refresh())
         ui.timer(0.3, self.test_qwen, once=True)
 
     # =================================================================== layout
@@ -357,7 +358,7 @@ class DashboardPage:
             with ui.row().classes("items-center gap-2"):
                 self.data_badge = ui.badge("MONITORING · STARTING", color=None).style("background:#1b3249;color:#dce8f2")
                 self.model_badge = ui.badge("QWEN3 · CHECKING", color=None).style("background:#1b3249;color:#dce8f2")
-                self.refresh_button = ui.button("Refresh", icon="refresh", on_click=self.refresh).props(
+                self.refresh_button = ui.button("Refresh", icon="refresh", on_click=lambda: self.refresh()).props(
                     "unelevated dense no-caps").style(f"background:{COLORS['blue']};color:white")
                 # kept for the code that updates them, but not shown: data loads by itself and
                 # knowledge imports/removals re-analyse automatically
@@ -814,15 +815,16 @@ class DashboardPage:
         self.kb_import_button.disable()
         self.kb_text.set_value("")
         self.kb_preview.clear()
+        self._render_knowledge()           # the history shows the new import at once
         self.qwen_results.clear()          # explanations are regenerated with the new knowledge
-        await self.refresh()
+        await self.refresh(force=True)
 
     async def _kb_remove(self, name: str) -> None:
         if kb_store.remove(name):
             ui.notify(f"Withdrew {name} (kept as .removed for the audit trail); re-analysing the logs...", type="info")
             self.qwen_results.clear()      # explanations are regenerated without the withdrawn knowledge
             self._render_knowledge()
-            await self.refresh()
+            await self.refresh(force=True)
             return
         self._render_knowledge()
 
@@ -874,10 +876,13 @@ class DashboardPage:
         self._closing: tuple[str, str] | None = None
 
     # =================================================================== data
-    async def refresh(self) -> None:
+    async def refresh(self, force: bool = False) -> None:
         if self.loading:
+            # a refresh is already running; a forced one (knowledge changed) runs again right after it
+            self.refresh_pending = self.refresh_pending or force
             return
         self.loading = True
+        self.refresh_pending = False
         self.refresh_button.disable()
         self.data_badge.set_text("MONITORING · LOADING")
         try:
@@ -898,6 +903,8 @@ class DashboardPage:
         finally:
             self.loading = False
             self.refresh_button.enable()
+        if self.refresh_pending:
+            await self.refresh()
 
     def _record_new_alerts(self, snapshot: DashboardSnapshot) -> list[Record]:
         cycle = int(snapshot.evaluation.get("cycle", 0))
